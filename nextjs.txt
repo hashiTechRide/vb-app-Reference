@@ -1,0 +1,82 @@
+各プロジェクトのGitHub Starsと採用技術を調査しました。人気順にランキングすると以下のようになります：
+
+## Next.js製OSSプロジェクト - GitHub Stars人気ランキング
+
+### 1位: **Cal.com** ⭐ 39,200
+- **URL**: https://github.com/calcom/cal.com
+- **説明**: スケジューリング・予約管理プラットフォーム（Calendlyの代替）
+- **主な技術スタック**:
+  - Next.js
+  - TypeScript
+  - Prisma
+  - PostgreSQL
+  - tRPC
+  - Tailwind CSS
+
+### 2位: **Twenty** ⭐ 37,000
+- **URL**: https://github.com/twentyhq/twenty
+- **説明**: CRM（顧客関係管理）ツール（Salesforceの代替）
+- **主な技術スタック**:
+  - Next.js
+  - TypeScript
+  - GraphQL
+  - PostgreSQL
+  - Prisma
+  - React
+
+### 3位: **Plane** ⭐ 31,100
+- **URL**: https://github.com/makeplane/plane
+- **説明**: プロジェクト管理ツール（Jira/Linearの代替）
+- **主な技術スタック**:
+  - Next.js
+  - TypeScript
+  - Python (Django)
+  - Redis
+  - PostgreSQL
+  - Docker
+
+### 4位: **Dub** ⭐ 22,900
+- **URL**: https://github.com/dubinc/dub
+- **説明**: URL短縮サービス（分析機能付き）
+- **主な技術スタック**:
+  - Next.js
+  - TypeScript
+  - Upstash Redis
+  - PlanetScale (MySQL)
+  - Tinybird
+  - Vercel Edge Functions
+
+### 5位: **Documenso** ⭐ 12,200
+- **URL**: https://github.com/documenso/documenso
+- **説明**: 電子署名ツール（DocuSignの代替）
+- **主な技術スタック**:
+  - Next.js
+  - TypeScript
+  - Prisma
+  - PostgreSQL
+  - Nodemailer
+  - tRPC
+
+### 6位: **Formbricks** ⭐ 11,700
+- **URL**: https://github.com/formbricks/formbricks
+- **説明**: フォーム・アンケートビルダー
+- **主な技術スタック**:
+  - Next.js
+  - TypeScript
+  - Prisma
+  - PostgreSQL
+  - React
+  - Tailwind CSS
+
+### 7位: **Rallly** ⭐ 4,900
+- **URL**: https://github.com/lukevella/rallly
+- **説明**: グループスケジュール調整ツール（Doodleの代替）
+- **主な技術スタック**:
+  - Next.js
+  - TypeScript
+  - Prisma
+  - PostgreSQL
+  - React
+  - Tailwind CSS
+
+これらすべてのプロジェクトは実際に稼働している製品で、コードの品質が高く、学習教材としても非常に優れています。特にCal.comとTwentyは急成長中のOSSプロジェクトとして注目されています。
