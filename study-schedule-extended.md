@@ -110,7 +110,7 @@ VB.NETの型の経験を活かしつつ、TypeScriptの型システムに慣れ�
 | 2/16 | 月 | 🏢 | 環境構築 + TS入門 | Node.js / npm / VS Code セットアップ。TSコンパイラ導入。`tsc --init`でtsconfig作成。Hello World実行 | GitHubリポジトリ作成。Hello World |
 | 2/16 | 月 | 🌙 | VS Code環境整備 | 推奨拡張機能のインストール。ESLint + Prettier設定。tsconfig.jsonの各オプションの意味を調べる | VS Code設定完了、設定メモ作成 |
 | 2/17 | 火 | 🏢 | 基本の型 | string, number, boolean, array, tuple, enum, any, unknown, void, null, undefined。VB.NETとの型対応表を自作 | 各型のサンプルコード + VB.NET対応表 |
-| 2/17 | 火 | 🌙 | 記事読み | Zenn/Qiitaで「TypeScript 入門」の良記事を2〜3本読む | 気になった記事をブックマーク |
+| 2/17 | 火 | 🌙 | 記事読み | Zenn/Qiitaで「TypeScript 入門」の良記事を2〜3本読む(https://zenn.dev/hinoshin/articles/87b99f4ddc2729)(https://qiita.com/uhyo/items/e2fdef2d3236b9bfe74a) | 気になった記事をブックマーク |
 | 2/18 | 水 | 🏢 | 関数の型付け | 引数・戻り値の型、オプション引数、デフォルト引数、アロー関数。VB.NETのFunction/Subとの違い | 四則演算関数、配列操作関数 |
 | 2/18 | 水 | 🌙 | 型パズル | type-challenges（GitHub）のeasyレベルに挑戦 | 3〜5問解く |
 | 2/19 | 木 | 🏢 | interface と type | オブジェクト型定義、interfaceのextends、typeのユニオン・インターセクション。VB.NETのClassとの比較 | ユーザー情報型の定義 |
