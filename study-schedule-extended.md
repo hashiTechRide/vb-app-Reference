@@ -112,9 +112,9 @@ VB.NETの型の経験を活かしつつ、TypeScriptの型システムに慣れ�
 | 2/17 | 火 | 🏢 | 基本の型 | string, number, boolean, array, tuple, enum, any, unknown, void, null, undefined。VB.NETとの型対応表を自作 | 各型のサンプルコード + VB.NET対応表 |
 | 2/17 | 火 | 🌙 | 記事読み | Zenn/Qiitaで「TypeScript 入門」の良記事を2〜3本読む(https://zenn.dev/hinoshin/articles/87b99f4ddc2729)(https://qiita.com/uhyo/items/e2fdef2d3236b9bfe74a) | 気になった記事をブックマーク |
 | 2/18 | 水 | 🏢 | 関数の型付け | 引数・戻り値の型、オプション引数、デフォルト引数、アロー関数。VB.NETのFunction/Subとの違い | 四則演算関数、配列操作関数 |
-| 2/18 | 水 | 🌙 | 型パズル | type-challenges（GitHub）のeasyレベルに挑戦 | 3〜5問解く |
+| 2/18 | 水 | 🌙 | 型パズル | type-challenges（GitHub）のeasyレベルに挑戦(https://github.com/type-challenges/type-challenges/blob/main/README.ja.md) | 3〜5問解く |
 | 2/19 | 木 | 🏢 | interface と type | オブジェクト型定義、interfaceのextends、typeのユニオン・インターセクション。VB.NETのClassとの比較 | ユーザー情報型の定義 |
-| 2/19 | 木 | 🌙 | コードリーディング | GitHubでTypeScriptプロジェクトのコードを読む（小規模OSSのsrc/types/を眺める） | 型定義の実例メモ |
+| 2/19 | 木 | 🌙 | コードリーディング | GitHubでTypeScriptプロジェクトのコードを読む（小規模OSSのsrc/types/を眺める）(https://github.com/gvergnaud/ts-pattern)(https://github.com/sindresorhus/ky)(https://github.com/ai/nanoid) | 型定義の実例メモ |
 | 2/20 | 金 | 🏢 | ユニオン型・リテラル型 | ユニオン型、リテラル型、型の絞り込み（typeof, in演算子）。VB.NETにない概念なので重点的に | ステータス管理サンプル（成功/失敗/ローディング） |
 | 2/20 | 金 | 🌙 | 週の振り返り | Week1前半の復習。理解度チェックシート記入。つまずいたポイントの整理 | 振り返りメモ |
 | 2/21 | 土 | 🏠 | TS実践（3h） | TypeScriptだけでCLIツールを作る。例：体重記録CLIツール（JSON読み書き）。型定義、関数、モジュール分割を実践 | CLIツール完成、GitHubにpush |
@@ -173,7 +173,7 @@ WinFormsのイベント駆動 → Reactの宣言的UI。最も重要なパラダ
 | 3/11 | 水 | 🏢 | useContext | コンテキスト作成・提供・消費、テーマ切替の実装 | ライト/ダークテーマ切替 |
 | 3/11 | 水 | 🌙 | 動画学習 | useContext, useReducerの解説動画視聴 | 視聴メモ |
 | 3/12 | 木 | 🏢 | カスタムフック | カスタムフックの設計。useFetch, useLocalStorage, useFormなど | useFetchフック作成・TODOに適用 |
-| 3/12 | 木 | 🌙 | OSSのフック集を読む | usehooks-tsのソースコードを読み、実装パターンを学ぶ | 気になったフックの実装メモ |
+| 3/12 | 木 | 🌙 | OSSのフック集を読む | usehooks-tsのソースコードを読み、実装パターンを学ぶ(https://github.com/juliencrn/usehooks-ts)(https://github.com/streamich/react-use)(https://github.com/react-hookz/web) | 気になったフックの実装メモ |
 | 3/13 | 金 | 🏢 | React総合演習 | TODOアプリ本格版：追加・削除・完了切替・フィルタ・LocalStorage保存 | TODOアプリ完成 |
 | 3/13 | 金 | 🌙 | 週の振り返り | Week4振り返り。理解度チェック更新 | 振り返りメモ |
 | 3/14 | 土 | 🏠 | React Hook Form + zod（3h） | React Hook Formの導入、zodスキーマでのバリデーション。業務でフォームは頻出するので重点学習 | 登録フォームをRHF + zodで作り直し |
