@@ -12,7 +12,8 @@
 8. [共通ヘルパークラスの実装例](#共通ヘルパークラスの実装例)
 9. [よくあるハマりどころと対策](#よくあるハマりどころと対策)
 10. [関連知識：知っておくと役立つポイント](#関連知識知っておくと役立つポイント)
-11. [C# と VB.NET の構文対応早見表](#c-と-vbnet-の構文対応早見表)
+11. [条件に応じてSELECT内容を動的に切り替える方法](#条件に応じてselect内容を動的に切り替える方法)
+12. [C# と VB.NET の構文対応早見表](#c-と-vbnet-の構文対応早見表)
 
 ---
 
@@ -433,6 +434,323 @@ UPDATE 文では、バインド変数に `DBNull.Value` を渡すとそのまま
 **UpdateUser.sql**
 
 ```sql
+UPDATE Users
+SET
+    Name           = @Name,
+    Email          = @Email,
+    Age            = @Age,
+    DepartmentId   = @DepartmentId,
+    UpdatedAt      = GETDATE()
+WHERE
+    Id = @Id
+```
+
+**C# 側**
+
+```csharp
+string sql = SqlResourceLoader.Load("MyProject.Queries.UpdateUser.sql");
+
+using (var conn = new SqlConnection(connectionString))
+using (var cmd = new SqlCommand(sql, conn))
+{
+    cmd.Parameters.Add(new SqlParameter("@Id",     SqlDbType.Int)           { Value = userId });
+    cmd.Parameters.Add(new SqlParameter("@Name",   SqlDbType.NVarChar, 100) { Value = (object)name  ?? DBNull.Value });
+    cmd.Parameters.Add(new SqlParameter("@Email",  SqlDbType.NVarChar, 256) { Value = (object)email ?? DBNull.Value });
+    cmd.Parameters.Add(new SqlParameter("@Age",    SqlDbType.Int)           { Value = (object)age   ?? DBNull.Value });
+    cmd.Parameters.Add(new SqlParameter("@DeptId", SqlDbType.Int)           { Value = (object)deptId ?? DBNull.Value });
+
+    conn.Open();
+    int affected = cmd.ExecuteNonQuery();
+}
+```
+
+**VB.NET 側**
+
+```vb
+Dim sql As String = SqlResourceLoader.Load("MyProject.Queries.UpdateUser.sql")
+
+Using conn As New SqlConnection(connectionString)
+    Using cmd As New SqlCommand(sql, conn)
+        cmd.Parameters.Add(New SqlParameter("@Id",     SqlDbType.Int) With {.Value = userId})
+        cmd.Parameters.Add(New SqlParameter("@Name",   SqlDbType.NVarChar, 100) With {
+            .Value = If(name, DirectCast(DBNull.Value, Object))
+        })
+        cmd.Parameters.Add(New SqlParameter("@Email",  SqlDbType.NVarChar, 256) With {
+            .Value = If(email, DirectCast(DBNull.Value, Object))
+        })
+        cmd.Parameters.Add(New SqlParameter("@Age",    SqlDbType.Int) With {
+            .Value = If(age.HasValue, DirectCast(age.Value, Object), DBNull.Value)
+        })
+        cmd.Parameters.Add(New SqlParameter("@DeptId", SqlDbType.Int) With {
+            .Value = If(deptId.HasValue, DirectCast(deptId.Value, Object), DBNull.Value)
+        })
+
+        conn.Open()
+        Dim affected As Integer = cmd.ExecuteNonQuery()
+    End Using
+End Using
+```
+
+### 部分更新（NULL のときは更新しない）
+
+一部の列だけ更新し、NULL が渡された列は元の値を維持したい場合は `COALESCE` を使います。
+
+```sql
+UPDATE Users
+SET
+    Name         = COALESCE(@Name,   Name),      -- @Name が NULL なら現在値を維持
+    Email        = COALESCE(@Email,  Email),
+    Age          = COALESCE(@Age,    Age),
+    UpdatedAt    = GETDATE()
+WHERE
+    Id = @Id
+```
+
+> **注意：** この方法では「意図的に NULL をセットしたい」ケースに対応できません。
+> その場合は「更新するかどうか」を示す別のフラグパラメータを用意するか、
+> NULL 代入用の別のSQLを用意する設計が必要です。
+
+---
+
+## MERGE文でのNULL対応
+
+MERGE 文は INSERT と UPDATE を1文で実行できる構文です。NULL の扱いは INSERT / UPDATE と同じですが、1文に両方含まれるため注意が必要です。
+
+**MergeUser.sql**
+
+```sql
+MERGE INTO Users AS tgt
+USING (
+    SELECT
+        @Id             AS Id,
+        @Name           AS Name,
+        @Email          AS Email,
+        @Age            AS Age,
+        @DepartmentId   AS DepartmentId
+) AS src
+ON tgt.Id = src.Id
+
+WHEN MATCHED THEN
+    UPDATE SET
+        Name           = src.Name,
+        Email          = src.Email,
+        Age            = src.Age,
+        DepartmentId   = src.DepartmentId,
+        UpdatedAt      = GETDATE()
+
+WHEN NOT MATCHED THEN
+    INSERT (Id, Name, Email, Age, DepartmentId, CreatedAt, UpdatedAt)
+    VALUES (src.Id, src.Name, src.Email, src.Age, src.DepartmentId, GETDATE(), GETDATE())
+;  -- ← MERGE文は必ずセミコロンで終端すること！
+```
+
+**C# 側**
+
+```csharp
+string sql = SqlResourceLoader.Load("MyProject.Queries.MergeUser.sql");
+
+using (var conn = new SqlConnection(connectionString))
+using (var cmd = new SqlCommand(sql, conn))
+{
+    cmd.Parameters.Add(new SqlParameter("@Id",             SqlDbType.Int)           { Value = userId });
+    cmd.Parameters.Add(new SqlParameter("@Name",           SqlDbType.NVarChar, 100) { Value = (object)name   ?? DBNull.Value });
+    cmd.Parameters.Add(new SqlParameter("@Email",          SqlDbType.NVarChar, 256) { Value = (object)email  ?? DBNull.Value });
+    cmd.Parameters.Add(new SqlParameter("@Age",            SqlDbType.Int)           { Value = (object)age    ?? DBNull.Value });
+    cmd.Parameters.Add(new SqlParameter("@DepartmentId",   SqlDbType.Int)           { Value = (object)deptId ?? DBNull.Value });
+
+    conn.Open();
+    int affected = cmd.ExecuteNonQuery();
+}
+```
+
+**VB.NET 側**
+
+```vb
+Dim sql As String = SqlResourceLoader.Load("MyProject.Queries.MergeUser.sql")
+
+Using conn As New SqlConnection(connectionString)
+    Using cmd As New SqlCommand(sql, conn)
+        cmd.Parameters.Add(New SqlParameter("@Id", SqlDbType.Int) With {.Value = userId})
+        cmd.Parameters.Add(New SqlParameter("@Name", SqlDbType.NVarChar, 100) With {
+            .Value = If(name, DirectCast(DBNull.Value, Object))
+        })
+        cmd.Parameters.Add(New SqlParameter("@Email", SqlDbType.NVarChar, 256) With {
+            .Value = If(email, DirectCast(DBNull.Value, Object))
+        })
+        cmd.Parameters.Add(New SqlParameter("@Age", SqlDbType.Int) With {
+            .Value = If(age.HasValue, DirectCast(age.Value, Object), DBNull.Value)
+        })
+        cmd.Parameters.Add(New SqlParameter("@DepartmentId", SqlDbType.Int) With {
+            .Value = If(deptId.HasValue, DirectCast(deptId.Value, Object), DBNull.Value)
+        })
+
+        conn.Open()
+        Dim affected As Integer = cmd.ExecuteNonQuery()
+    End Using
+End Using
+```
+
+### MERGE文での注意点
+
+1. **セミコロン必須** — MERGE文は `;` で終わらないとエラーになります
+2. **ON句にNULL可能な列を使わない** — `ON tgt.NullableCol = src.NullableCol` は `NULL = NULL` が `UNKNOWN` になるためマッチしません
+3. **同時実行性** — MERGE文はデッドロックを起こしやすい傾向があります。高頻度で実行する場合は `WITH (HOLDLOCK)` などのヒントを検討してください
+4. **OUTPUT句** — INSERT/UPDATE どちらが実行されたかを `$action` で取得できます
+
+```sql
+-- どちらの操作が行われたか確認する例
+MERGE INTO Users AS tgt
+USING (...) AS src
+ON tgt.Id = src.Id
+WHEN MATCHED THEN UPDATE SET ...
+WHEN NOT MATCHED THEN INSERT ...
+OUTPUT $action, inserted.Id;   -- 'INSERT' or 'UPDATE' が返る
+```
+
+---
+
+## 共通ヘルパークラスの実装例
+
+実際のプロジェクトでは、パラメータ生成やNULL変換を毎回書くのは冗長です。ヘルパークラスにまとめましょう。
+
+### C# 版
+
+```csharp
+using System;
+using System.Collections.Generic;
+using System.Data;
+using System.Data.SqlClient;
+using System.IO;
+using System.Reflection;
+
+namespace MyProject.Helpers
+{
+    /// <summary>
+    /// SQL埋め込みリソースの読み込みとパラメータ生成を支援するヘルパー
+    /// </summary>
+    public static class SqlHelper
+    {
+        // ================================================================
+        // リソース読み込み
+        // ================================================================
+
+        /// <summary>
+        /// 埋め込みリソースからSQLを読み出す
+        /// </summary>
+        public static string LoadSql(string resourceName)
+        {
+            var assembly = Assembly.GetExecutingAssembly();
+            using (var stream = assembly.GetManifestResourceStream(resourceName))
+            {
+                if (stream == null)
+                {
+                    var names = assembly.GetManifestResourceNames();
+                    throw new FileNotFoundException(
+                        $"リソース '{resourceName}' が見つかりません。\n" +
+                        $"登録済み: {string.Join(", ", names)}");
+                }
+
+                using (var reader = new StreamReader(stream))
+                {
+                    return reader.ReadToEnd();
+                }
+            }
+        }
+
+        // ================================================================
+        // パラメータ生成
+        // ================================================================
+
+        /// <summary>
+        /// SqlParameter を生成する（null は自動的に DBNull.Value に変換）
+        /// </summary>
+        public static SqlParameter MakeParam(string name, SqlDbType type, object value)
+        {
+            return new SqlParameter(name, type)
+            {
+                Value = value ?? DBNull.Value
+            };
+        }
+
+        /// <summary>
+        /// 文字列型の SqlParameter を生成する（Size 指定付き）
+        /// </summary>
+        public static SqlParameter MakeStringParam(string name, int size, string value)
+        {
+            return new SqlParameter(name, SqlDbType.NVarChar, size)
+            {
+                Value = (object)value ?? DBNull.Value
+            };
+        }
+
+        /// <summary>
+        /// SqlParameter を一括登録する
+        /// </summary>
+        public static void AddParameters(SqlCommand cmd, params SqlParameter[] parameters)
+        {
+            foreach (var param in parameters)
+            {
+                cmd.Parameters.Add(param);
+            }
+        }
+
+        // ================================================================
+        // 実行ショートカット
+        // ================================================================
+
+        /// <summary>
+        /// SELECT文を実行し、DataTable で返す
+        /// </summary>
+        public static DataTable ExecuteQuery(
+            string connectionString,
+            string resourceName,
+            params SqlParameter[] parameters)
+        {
+            string sql = LoadSql(resourceName);
+            var dt = new DataTable();
+
+            using (var conn = new SqlConnection(connectionString))
+            using (var cmd = new SqlCommand(sql, conn))
+            {
+                AddParameters(cmd, parameters);
+                conn.Open();
+
+                using (var adapter = new SqlDataAdapter(cmd))
+                {
+                    adapter.Fill(dt);
+                }
+            }
+
+            return dt;
+        }
+
+        /// <summary>
+        /// INSERT / UPDATE / DELETE / MERGE を実行し、影響行数を返す
+        /// </summary>
+        public static int ExecuteNonQuery(
+            string connectionString,
+            string resourceName,
+            params SqlParameter[] parameters)
+        {
+            string sql = LoadSql(resourceName);
+
+            using (var conn = new SqlConnection(connectionString))
+            using (var cmd = new SqlCommand(sql, conn))
+            {
+                AddParameters(cmd, parameters);
+                conn.Open();
+                return cmd.ExecuteNonQuery();
+            }
+        }
+    }
+}
+```
+
+### VB.NET 版
+
+```vb
+Imports System.Data
+Imports S
 UPDATE Users
 SET
     Name           = @Name,
