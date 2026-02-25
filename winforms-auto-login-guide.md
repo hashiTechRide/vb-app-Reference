@@ -672,58 +672,7 @@ namespace YourAppNamespace
             [DataMember] public string EmployeeId { get; set; }
             [DataMember] public string Token { get; set; }
             [DataMember] public long ExpiresAtTicks { get; set; }
-      | **セキュリティ** | ○ 標準的 | ◎ より堅牢 |
-| **実装難易度** | ○ 簡単 | △ やや複雑 |
-| **DB負荷** | ◎ なし | △ ログイン時にDB問い合わせ |
-| **強制ログアウト** | × 不可 | ◎ 可能（DB側でトークン無効化） |
-| **複数端末制御** | × 不可 | ◎ 可能（1端末のみ許可など） |
-| **オフライン利用** | ◎ 可能 | × 不可 |
-| **推奨ケース** | 小規模・社内専用 | セキュリティ重視・管理機能必要 |
-
----
-
-## 方式1: ローカルトークン方式
-
-ローカルファイルにセッション情報を暗号化して保存する方式。DBへの追加変更が不要で、最もシンプルに実装できます。
-
-### 必要なNuGetパッケージ
-
-```
-System.Security.Cryptography.ProtectedData
-```
-
-### SessionManager クラス
-
-```csharp
-using System;
-using System.IO;
-using System.Security.Cryptography;
-using System.Text;
-using System.Text.Json;
-
-namespace YourAppNamespace
-{
-    /// <summary>
-    /// ローカルファイルベースのセッション管理クラス
-    /// </summary>
-    public static class LocalSessionManager
-    {
-        // セッションファイルの保存先
-        private static readonly string TokenFilePath = Path.Combine(
-            Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData),
-            "YourAppName",  // ← アプリ名に変更
-            "session.dat"
-        );
-
-        /// <summary>
-        /// セッション情報
-        /// </summary>
-        private class SessionData
-        {
-            public string EmployeeId { get; set; }
-            public string Token { get; set; }
-            public DateTime ExpiresAt { get; set; }
-            public string MachineId { get; set; }
+            [DataMember] public string MachineId { get; set; }
         }
 
         /// <summary>
@@ -736,7 +685,7 @@ namespace YourAppNamespace
             {
                 EmployeeId = employeeId,
                 Token = GenerateToken(),
-                ExpiresAt = GetEndOfToday(),
+                ExpiresAtTicks = GetEndOfToday().Ticks,
                 MachineId = GetMachineId()
             };
 
@@ -748,8 +697,8 @@ namespace YourAppNamespace
             }
 
             // JSON化して暗号化して保存
-            var json = JsonSerializer.Serialize(session);
-            var encrypted = ProtectData(json);
+            var json = SerializeToJson(session);
+            var encrypted = AesEncrypt(json, GetMachineKey());
             File.WriteAllBytes(TokenFilePath, encrypted);
         }
 
@@ -769,11 +718,12 @@ namespace YourAppNamespace
 
                 // 復号化してデシリアライズ
                 var encrypted = File.ReadAllBytes(TokenFilePath);
-                var json = UnprotectData(encrypted);
-                var session = JsonSerializer.Deserialize<SessionData>(json);
+                var json = AesDecrypt(encrypted, GetMachineKey());
+                var session = DeserializeFromJson(json);
 
                 // 有効期限チェック
-                if (DateTime.Now > session.ExpiresAt)
+                var expiresAt = new DateTime(session.ExpiresAtTicks);
+                if (DateTime.Now > expiresAt)
                 {
                     ClearSession();
                     return (false, null);
@@ -790,7 +740,7 @@ namespace YourAppNamespace
             }
             catch (CryptographicException)
             {
-                // 他ユーザーのファイルを読もうとした場合など
+                // 復号失敗（鍵の不一致など）
                 ClearSession();
                 return (false, null);
             }
@@ -851,21 +801,94 @@ namespace YourAppNamespace
         }
 
         /// <summary>
-        /// Windows DPAPIで暗号化（現在のWindowsユーザーのみ復号可能）
+        /// マシン固有の暗号化キーを生成（SHA256ハッシュ）
+        /// マシン名 + ユーザー名 + 固定ソルトから256ビット鍵を導出
         /// </summary>
-        private static byte[] ProtectData(string data)
+        private static byte[] GetMachineKey()
         {
-            var bytes = Encoding.UTF8.GetBytes(data);
-            return ProtectedData.Protect(bytes, null, DataProtectionScope.CurrentUser);
+            var source = $"{Environment.MachineName}_{Environment.UserName}_YourAppName_Salt";
+            using (var sha256 = SHA256.Create())
+            {
+                return sha256.ComputeHash(Encoding.UTF8.GetBytes(source));
+            }
         }
 
         /// <summary>
-        /// Windows DPAPIで復号化
+        /// AES-256-CBC で暗号化（IV はランダム生成し先頭に付加）
         /// </summary>
-        private static string UnprotectData(byte[] encrypted)
+        private static byte[] AesEncrypt(string plainText, byte[] key)
         {
-            var bytes = ProtectedData.Unprotect(encrypted, null, DataProtectionScope.CurrentUser);
-            return Encoding.UTF8.GetString(bytes);
+            using (var aes = Aes.Create())
+            {
+                aes.Key = key;
+                aes.GenerateIV();
+                aes.Mode = CipherMode.CBC;
+                aes.Padding = PaddingMode.PKCS7;
+
+                using (var encryptor = aes.CreateEncryptor())
+                {
+                    var plainBytes = Encoding.UTF8.GetBytes(plainText);
+                    var cipherBytes = encryptor.TransformFinalBlock(plainBytes, 0, plainBytes.Length);
+
+                    // IV（16バイト）+ 暗号文 を結合して返す
+                    var result = new byte[aes.IV.Length + cipherBytes.Length];
+                    Array.Copy(aes.IV, 0, result, 0, aes.IV.Length);
+                    Array.Copy(cipherBytes, 0, result, aes.IV.Length, cipherBytes.Length);
+                    return result;
+                }
+            }
+        }
+
+        /// <summary>
+        /// AES-256-CBC で復号化（先頭16バイトをIVとして使用）
+        /// </summary>
+        private static string AesDecrypt(byte[] cipherData, byte[] key)
+        {
+            using (var aes = Aes.Create())
+            {
+                aes.Key = key;
+                aes.Mode = CipherMode.CBC;
+                aes.Padding = PaddingMode.PKCS7;
+
+                // 先頭16バイトをIVとして取り出す
+                var iv = new byte[16];
+                Array.Copy(cipherData, 0, iv, 0, 16);
+                aes.IV = iv;
+
+                var cipherBytes = new byte[cipherData.Length - 16];
+                Array.Copy(cipherData, 16, cipherBytes, 0, cipherBytes.Length);
+
+                using (var decryptor = aes.CreateDecryptor())
+                {
+                    var plainBytes = decryptor.TransformFinalBlock(cipherBytes, 0, cipherBytes.Length);
+                    return Encoding.UTF8.GetString(plainBytes);
+                }
+            }
+        }
+
+        /// <summary>
+        /// DataContractJsonSerializer で JSON シリアライズ
+        /// </summary>
+        private static string SerializeToJson(SessionData data)
+        {
+            var serializer = new DataContractJsonSerializer(typeof(SessionData));
+            using (var ms = new MemoryStream())
+            {
+                serializer.WriteObject(ms, data);
+                return Encoding.UTF8.GetString(ms.ToArray());
+            }
+        }
+
+        /// <summary>
+        /// DataContractJsonSerializer で JSON デシリアライズ
+        /// </summary>
+        private static SessionData DeserializeFromJson(string json)
+        {
+            var serializer = new DataContractJsonSerializer(typeof(SessionData));
+            using (var ms = new MemoryStream(Encoding.UTF8.GetBytes(json)))
+            {
+                return (SessionData)serializer.ReadObject(ms);
+            }
         }
 
         #endregion
@@ -880,383 +903,28 @@ namespace YourAppNamespace
 │                    アプリ起動時                          │
 ├─────────────────────────────────────────────────────────┤
 │  1. ローカルファイル（session.dat）を読み込み            │
-│  2. Windows DPAPIで復号化                               │
+│  2. マシン固有鍵でAES-256復号化                         │
 │  3. 有効期限チェック（当日中か？）                       │
 │  4. PC識別子チェック（同一PCか？）                       │
 │  5. すべてOKなら自動ログイン成功                         │
 └─────────────────────────────────────────────────────────┘
 ```
 
----
+### 方式1との違い
 
-## 方式2: DBトークン検証方式
-
-DBにトークンを保存し、アプリ起動時にDBと照合する方式。管理者による強制ログアウトや、複数端末からのログイン制御が可能です。
-
-### 必要なDB変更
-
-#### テーブル追加: LOGIN_SESSIONS
-
-```sql
-CREATE TABLE LOGIN_SESSIONS (
-    SESSION_ID      VARCHAR2(64)  PRIMARY KEY,
-    EMPLOYEE_ID     VARCHAR2(20)  NOT NULL,
-    TOKEN           VARCHAR2(64)  NOT NULL,
-    MACHINE_ID      VARCHAR2(100) NOT NULL,
-    CREATED_AT      TIMESTAMP     DEFAULT SYSTIMESTAMP,
-    EXPIRES_AT      TIMESTAMP     NOT NULL,
-    IS_VALID        NUMBER(1)     DEFAULT 1,
-    CONSTRAINT FK_LOGIN_SESSIONS_EMP 
-        FOREIGN KEY (EMPLOYEE_ID) REFERENCES EMPLOYEES(EMPLOYEE_ID)
-);
-
--- インデックス
-CREATE INDEX IDX_LOGIN_SESSIONS_EMP ON LOGIN_SESSIONS(EMPLOYEE_ID);
-CREATE INDEX IDX_LOGIN_SESSIONS_TOKEN ON LOGIN_SESSIONS(TOKEN);
-
--- 有効期限切れセッションを削除するジョブ（オプション）
--- 日次で実行することを推奨
-DELETE FROM LOGIN_SESSIONS WHERE EXPIRES_AT < SYSTIMESTAMP;
-```
-
-### DbSessionManager クラス
-
-```csharp
-using System;
-using System.IO;
-using System.Security.Cryptography;
-using System.Text;
-using System.Text.Json;
-using Oracle.ManagedDataAccess.Client;
-
-namespace YourAppNamespace
-{
-    /// <summary>
-    /// DBトークン検証方式のセッション管理クラス
-    /// </summary>
-    public static class DbSessionManager
-    {
-        // ローカルキャッシュファイルの保存先
-        private static readonly string CacheFilePath = Path.Combine(
-            Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData),
-            "YourAppName",
-            "session_cache.dat"
-        );
-
-        // DB接続文字列（実際の環境に合わせて変更）
-        private static readonly string ConnectionString = 
-            "Data Source=YOUR_ORACLE;User Id=YOUR_USER;Password=YOUR_PASSWORD;";
-
-        /// <summary>
-        /// ローカルキャッシュ情報
-        /// </summary>
-        private class SessionCache
-        {
-            public string SessionId { get; set; }
-            public string EmployeeId { get; set; }
-            public string Token { get; set; }
-            public string MachineId { get; set; }
-        }
-
-        /// <summary>
-        /// ログイン成功時にセッションを作成
-        /// </summary>
-        /// <param name="employeeId">社員ID</param>
-        public static void CreateSession(string employeeId)
-        {
-            var sessionId = Guid.NewGuid().ToString("N");
-            var token = GenerateToken();
-            var machineId = GetMachineId();
-            var expiresAt = GetEndOfToday();
-
-            // 同一社員の既存セッションを無効化（1端末のみ許可する場合）
-            InvalidateExistingSessions(employeeId);
-
-            // DBにセッション登録
-            using (var conn = new OracleConnection(ConnectionString))
-            {
-                conn.Open();
-                using (var cmd = conn.CreateCommand())
-                {
-                    cmd.CommandText = @"
-                        INSERT INTO LOGIN_SESSIONS 
-                            (SESSION_ID, EMPLOYEE_ID, TOKEN, MACHINE_ID, EXPIRES_AT, IS_VALID)
-                        VALUES 
-                            (:sessionId, :employeeId, :token, :machineId, :expiresAt, 1)";
-                    
-                    cmd.Parameters.Add(":sessionId", sessionId);
-                    cmd.Parameters.Add(":employeeId", employeeId);
-                    cmd.Parameters.Add(":token", token);
-                    cmd.Parameters.Add(":machineId", machineId);
-                    cmd.Parameters.Add(":expiresAt", expiresAt);
-                    
-                    cmd.ExecuteNonQuery();
-                }
-            }
-
-            // ローカルにキャッシュ保存
-            SaveLocalCache(new SessionCache
-            {
-                SessionId = sessionId,
-                EmployeeId = employeeId,
-                Token = token,
-                MachineId = machineId
-            });
-        }
-
-        /// <summary>
-        /// 保存されたセッションで自動ログインを試行
-        /// </summary>
-        /// <returns>成功時は(true, 社員ID)、失敗時は(false, null)</returns>
-        public static (bool isValid, string employeeId) TryAutoLogin()
-        {
-            try
-            {
-                // ローカルキャッシュを読み込み
-                var cache = LoadLocalCache();
-                if (cache == null)
-                {
-                    return (false, null);
-                }
-
-                // PC識別子チェック
-                if (cache.MachineId != GetMachineId())
-                {
-                    ClearSession();
-                    return (false, null);
-                }
-
-                // DBでトークン検証
-                using (var conn = new OracleConnection(ConnectionString))
-                {
-                    conn.Open();
-                    using (var cmd = conn.CreateCommand())
-                    {
-                        cmd.CommandText = @"
-                            SELECT EMPLOYEE_ID 
-                            FROM LOGIN_SESSIONS 
-                            WHERE SESSION_ID = :sessionId 
-                              AND TOKEN = :token 
-                              AND MACHINE_ID = :machineId
-                              AND EXPIRES_AT > SYSTIMESTAMP
-                              AND IS_VALID = 1";
-                        
-                        cmd.Parameters.Add(":sessionId", cache.SessionId);
-                        cmd.Parameters.Add(":token", cache.Token);
-                        cmd.Parameters.Add(":machineId", cache.MachineId);
-
-                        var result = cmd.ExecuteScalar();
-                        
-                        if (result != null)
-                        {
-                            return (true, result.ToString());
-                        }
-                    }
-                }
-
-                // DB検証失敗 → ローカルキャッシュも削除
-                ClearSession();
-                return (false, null);
-            }
-            catch (Exception)
-            {
-                // DB接続エラーなど → 通常ログインへ
-                return (false, null);
-            }
-        }
-
-        /// <summary>
-        /// ログアウト時にセッションを削除
-        /// </summary>
-        public static void ClearSession()
-        {
-            var cache = LoadLocalCache();
-            
-            // DBのセッションを無効化
-            if (cache != null)
-            {
-                try
-                {
-                    using (var conn = new OracleConnection(ConnectionString))
-                    {
-                        conn.Open();
-                        using (var cmd = conn.CreateCommand())
-                        {
-                            cmd.CommandText = @"
-                                UPDATE LOGIN_SESSIONS 
-                                SET IS_VALID = 0 
-                                WHERE SESSION_ID = :sessionId";
-                            
-                            cmd.Parameters.Add(":sessionId", cache.SessionId);
-                            cmd.ExecuteNonQuery();
-                        }
-                    }
-                }
-                catch
-                {
-                    // DB更新失敗は無視
-                }
-            }
-
-            // ローカルキャッシュを削除
-            ClearLocalCache();
-        }
-
-        /// <summary>
-        /// 管理者用: 指定社員のセッションを強制無効化
-        /// </summary>
-        /// <param name="employeeId">社員ID</param>
-        public static void ForceLogout(string employeeId)
-        {
-            using (var conn = new OracleConnection(ConnectionString))
-            {
-                conn.Open();
-                using (var cmd = conn.CreateCommand())
-                {
-                    cmd.CommandText = @"
-                        UPDATE LOGIN_SESSIONS 
-                        SET IS_VALID = 0 
-                        WHERE EMPLOYEE_ID = :employeeId AND IS_VALID = 1";
-                    
-                    cmd.Parameters.Add(":employeeId", employeeId);
-                    cmd.ExecuteNonQuery();
-                }
-            }
-        }
-
-        #region Private Methods
-
-        /// <summary>
-        /// 同一社員の既存セッションを無効化
-        /// </summary>
-        private static void InvalidateExistingSessions(string employeeId)
-        {
-            using (var conn = new OracleConnection(ConnectionString))
-            {
-                conn.Open();
-                using (var cmd = conn.CreateCommand())
-                {
-                    cmd.CommandText = @"
-                        UPDATE LOGIN_SESSIONS 
-                        SET IS_VALID = 0 
-                        WHERE EMPLOYEE_ID = :employeeId AND IS_VALID = 1";
-                    
-                    cmd.Parameters.Add(":employeeId", employeeId);
-                    cmd.ExecuteNonQuery();
-                }
-            }
-        }
-
-        private static DateTime GetEndOfToday()
-        {
-            return DateTime.Today.AddDays(1).AddSeconds(-1);
-        }
-
-        private static string GenerateToken()
-        {
-            var bytes = new byte[32];
-            using (var rng = RandomNumberGenerator.Create())
-            {
-                rng.GetBytes(bytes);
-            }
-            return Convert.ToBase64String(bytes);
-        }
-
-        private static string GetMachineId()
-        {
-            return $"{Environment.MachineName}_{Environment.UserName}";
-        }
-
-        private static void SaveLocalCache(SessionCache cache)
-        {
-            var directory = Path.GetDirectoryName(CacheFilePath);
-            if (!Directory.Exists(directory))
-            {
-                Directory.CreateDirectory(directory);
-            }
-
-            var json = JsonSerializer.Serialize(cache);
-            var encrypted = ProtectedData.Protect(
-                Encoding.UTF8.GetBytes(json), 
-                null, 
-                DataProtectionScope.CurrentUser
-            );
-            File.WriteAllBytes(CacheFilePath, encrypted);
-        }
-
-        private static SessionCache LoadLocalCache()
-        {
-            if (!File.Exists(CacheFilePath))
-            {
-                return null;
-            }
-
-            try
-            {
-                var encrypted = File.ReadAllBytes(CacheFilePath);
-                var bytes = ProtectedData.Unprotect(
-                    encrypted, 
-                    null, 
-                    DataProtectionScope.CurrentUser
-                );
-                var json = Encoding.UTF8.GetString(bytes);
-                return JsonSerializer.Deserialize<SessionCache>(json);
-            }
-            catch
-            {
-                return null;
-            }
-        }
-
-        private static void ClearLocalCache()
-        {
-            try
-            {
-                if (File.Exists(CacheFilePath))
-                {
-                    File.Delete(CacheFilePath);
-                }
-            }
-            catch
-            {
-                // 削除失敗は無視
-            }
-        }
-
-        #endregion
-    }
-}
-```
-
-### 仕組み
-
-```
-┌─────────────────────────────────────────────────────────┐
-│                    ログイン成功時                        │
-├─────────────────────────────────────────────────────────┤
-│  1. トークンを生成                                      │
-│  2. DBのLOGIN_SESSIONSテーブルに登録                    │
-│  3. ローカルにセッションIDとトークンをキャッシュ         │
-└─────────────────────────────────────────────────────────┘
-                          ↓
-┌─────────────────────────────────────────────────────────┐
-│                    アプリ起動時                          │
-├─────────────────────────────────────────────────────────┤
-│  1. ローカルキャッシュを読み込み                         │
-│  2. DBに問い合わせてトークン検証                         │
-│     - セッションID一致？                                │
-│     - トークン一致？                                    │
-│     - 有効期限内？                                      │
-│     - IS_VALID = 1？                                   │
-│  3. すべてOKなら自動ログイン成功                         │
-└─────────────────────────────────────────────────────────┘
-```
+| 項目 | 方式1（DPAPI） | 方式3（AES） |
+|------|----------------|--------------|
+| **暗号化** | Windows DPAPI（OS任せ） | AES-256-CBC（自前実装） |
+| **鍵管理** | OSが自動管理 | マシン名+ユーザー名から導出 |
+| **NuGet** | `ProtectedData` パッケージ必要 | 不要 |
+| **他ユーザー保護** | ◎ OS レベルで保護 | ○ 鍵が異なるため復号不可 |
+| **JSONライブラリ** | `System.Text.Json`（NuGet） | `DataContractJsonSerializer`（標準） |
 
 ---
 
 ## 共通: ログインフォームでの使用例
 
-どちらの方式でも、呼び出し方はほぼ同じです。
+どの方式でも、呼び出し方はほぼ同じです。
 
 ```csharp
 public partial class LoginForm : Form
@@ -1272,6 +940,7 @@ public partial class LoginForm : Form
         var (isValid, employeeId) = LocalSessionManager.TryAutoLogin();
         // または
         // var (isValid, employeeId) = DbSessionManager.TryAutoLogin();
+        // var (isValid, employeeId) = StdLibSessionManager.TryAutoLogin();
         
         if (isValid)
         {
@@ -1304,6 +973,7 @@ public partial class LoginForm : Form
             LocalSessionManager.SaveSession(employeeId);
             // または
             // DbSessionManager.CreateSession(employeeId);
+            // StdLibSessionManager.SaveSession(employeeId);
             
             ShowMainForm(employeeId);
             this.Close();
@@ -1323,6 +993,7 @@ public partial class LoginForm : Form
         LocalSessionManager.ClearSession();
         // または
         // DbSessionManager.ClearSession();
+        // StdLibSessionManager.ClearSession();
 
         MessageBox.Show("ログアウトしました。", "完了", 
             MessageBoxButtons.OK, MessageBoxIcon.Information);
@@ -1360,7 +1031,7 @@ public partial class LoginForm : Form
 | 対策 | 説明 |
 |------|------|
 | **パスワード非保存** | パスワードは絶対にローカルに保存しない |
-| **DPAPI暗号化** | Windows標準の暗号化。他ユーザーは復号不可 |
+| **暗号化** | 方式1・2: Windows DPAPI / 方式3: AES-256-CBC |
 | **有効期限** | 当日中のみ有効（カスタマイズ可能） |
 | **PC識別** | 別PCにファイルをコピーしても使用不可 |
 | **ランダムトークン** | 推測不可能な32バイトのトークン |
@@ -1403,6 +1074,14 @@ public partial class LoginForm : Form
 - [ ] ログアウトボタンに `ClearSession()` を追加
 - [ ] （オプション）有効期限切れセッション削除ジョブを設定
 
+### 方式3（標準ライブラリのみ方式）
+
+- [ ] `StdLibSessionManager` クラスをプロジェクトに追加
+- [ ] アプリ名（TokenFilePath内）を変更
+- [ ] `GetMachineKey()` 内のソルト文字列をアプリ固有の値に変更
+- [ ] LoginForm に自動ログイン処理を追加
+- [ ] ログアウトボタンに `ClearSession()` を追加
+
 ---
 
 ## ライセンス
@@ -1416,3 +1095,4 @@ public partial class LoginForm : Form
 | 日付 | 内容 |
 |------|------|
 | 2024-XX-XX | 初版作成 |
+| 2024-XX-XX | 方式3（標準ライブラリのみ方式）を追加、ドキュメント構造を整理 |
