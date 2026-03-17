@@ -398,7 +398,25 @@ function New-XlsxReport([VBNetParser]$P, [string]$Out) {
 
         [IO.Compression.ZipFile]::CreateFromDirectory($td,$Out,[IO.Compression.CompressionLevel]::Optimal,$false)
         Write-Host "  保存完了: $Out" -ForegroundColor Green
-    } finally { if(Test-Path $td){Remove-Item $td -Recurse -Force} }
+    }
+    catch {
+        Write-Host ''
+        Write-Host '===== エラー詳細 =====' -ForegroundColor Red
+        Write-Host "メッセージ : $($_.Exception.Message)" -ForegroundColor Red
+        Write-Host "例外型     : $($_.Exception.GetType().FullName)" -ForegroundColor Red
+        Write-Host "発生箇所   : $($_.InvocationInfo.ScriptName):$($_.InvocationInfo.ScriptLineNumber)" -ForegroundColor Red
+        Write-Host "該当行     : $($_.InvocationInfo.Line.Trim())" -ForegroundColor Yellow
+        Write-Host '--- スタックトレース ---' -ForegroundColor Red
+        Write-Host $_.ScriptStackTrace -ForegroundColor Gray
+        $inner = $_.Exception.InnerException
+        while ($inner) {
+            Write-Host "  内部例外 : $($inner.Message)" -ForegroundColor DarkRed
+            $inner = $inner.InnerException
+        }
+        Write-Host '=====================' -ForegroundColor Red
+        throw
+    }
+    finally { if(Test-Path $td){Remove-Item $td -Recurse -Force} }
 }
 #endregion
 
@@ -412,17 +430,38 @@ Write-Host '  VB.NET 2008 CE メトリクス → Excel (OpenXML)' -ForegroundCol
 Write-Host ('='*60) -ForegroundColor Cyan
 Write-Host "  対象: $resolvedPath"; Write-Host "  出力: $OutFile"; Write-Host ''
 
-Write-Host '[1/3] ファイル探索...' -ForegroundColor Cyan
-$parser=[VBNetParser]::new($resolvedPath); $parser.DiscoverFiles()
-if($parser.Files.Count -eq 0){Write-Error '.vbファイルが見つかりません。';exit 1}
-Write-Host "  ファイル数: $($parser.Files.Count)" -ForegroundColor Gray
+try {
+    Write-Host '[1/3] ファイル探索...' -ForegroundColor Cyan
+    $parser=[VBNetParser]::new($resolvedPath); $parser.DiscoverFiles()
+    if($parser.Files.Count -eq 0){Write-Error '.vbファイルが見つかりません。';exit 1}
+    Write-Host "  ファイル数: $($parser.Files.Count)" -ForegroundColor Gray
 
-Write-Host '[2/3] コード解析...' -ForegroundColor Cyan
-$parser.Analyze()
-Write-Host "  メソッド: $($parser.Methods.Count) / GV: $($parser.GlobalVars.Count) / フォーム: $($parser.Forms.Count) / 分岐: $($parser.Branches.Count)" -ForegroundColor Gray
+    Write-Host '[2/3] コード解析...' -ForegroundColor Cyan
+    $parser.Analyze()
+    Write-Host "  メソッド: $($parser.Methods.Count) / GV: $($parser.GlobalVars.Count) / フォーム: $($parser.Forms.Count) / 分岐: $($parser.Branches.Count)" -ForegroundColor Gray
 
-Write-Host '[3/3] Excel生成...' -ForegroundColor Cyan
-New-XlsxReport -P $parser -Out $OutFile
+    Write-Host '[3/3] Excel生成...' -ForegroundColor Cyan
+    New-XlsxReport -P $parser -Out $OutFile
 
-Write-Host ''; Write-Host '完了!' -ForegroundColor Green; Write-Host "ファイル: $OutFile" -ForegroundColor Green
+    Write-Host ''; Write-Host '完了!' -ForegroundColor Green; Write-Host "ファイル: $OutFile" -ForegroundColor Green
+}
+catch {
+    Write-Host ''
+    Write-Host '======================================' -ForegroundColor Red
+    Write-Host '  エラーが発生しました' -ForegroundColor Red
+    Write-Host '======================================' -ForegroundColor Red
+    Write-Host "メッセージ : $($_.Exception.Message)" -ForegroundColor Red
+    Write-Host "例外型     : $($_.Exception.GetType().FullName)" -ForegroundColor Red
+    Write-Host "発生箇所   : $($_.InvocationInfo.ScriptName):$($_.InvocationInfo.ScriptLineNumber)" -ForegroundColor Red
+    Write-Host "該当行     : $($_.InvocationInfo.Line.Trim())" -ForegroundColor Yellow
+    Write-Host '--- スタックトレース ---' -ForegroundColor Red
+    Write-Host $_.ScriptStackTrace -ForegroundColor Gray
+    $inner = $_.Exception.InnerException
+    while ($inner) {
+        Write-Host "  内部例外 : $($inner.Message)" -ForegroundColor DarkRed
+        $inner = $inner.InnerException
+    }
+    Write-Host '======================================' -ForegroundColor Red
+    exit 1
+}
 #endregion
