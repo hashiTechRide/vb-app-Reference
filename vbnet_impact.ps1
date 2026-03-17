@@ -347,6 +347,398 @@ function Write-XlsxReport {
     Add-Type -AssemblyName System.IO.Compression
     Add-Type -AssemblyName System.IO.Compression.FileSystem
 
+    function Esc([string]$s) {
+        if(!$s){return ''}
+        # XML 1.0 で許可される文字: #x9 | #xA | #xD | [#x20-#xD7FF] | [#xE000-#xFFFD]
+        # それ以外の制御文字を除去
+        $cleaned = [Text.StringBuilder]::new($s.Length)
+        foreach ($ch in $s.ToCharArray()) {
+            $code = [int]$ch
+            if ($code -eq 0x9 -or $code -eq 0xA -or $code -eq 0xD -or ($code -ge 0x20 -and $code -le 0xD7FF) -or ($code -ge 0xE000 -and $code -le 0xFFFD)) {
+                [void]$cleaned.Append($ch)
+            }
+        }
+        return $cleaned.ToString().Replace('&','&amp;').Replace('<','&lt;').Replace('>','&gt;').Replace('"','&quot;')
+    }
+    function ColRef([int]$c) { $r='';$c++;while($c -gt 0){$c--;$r=[char](65+($c%26))+$r;$c=[math]::Floor($c/26)};$r }
+    function MkRow([object[]]$v,[int]$s) { $cells=[System.Collections.Generic.List[hashtable]]::new(); foreach($val in $v){$cells.Add(@{V=$val;S=$s})}; @{Cells=$cells} }
+
+    function SheetXml([hashtable]$sh) {
+        $sb=[Text.StringBuilder]::new()
+        [void]$sb.Append('<?xml version="1.0" encoding="UTF-8" standalone="yes"?><worksheet xmlns="http://schemas.openxmlformats.org/spreadsheetml/2006/main"><sheetData>')
+        for($ri=0;$ri -lt $sh.Rows.Count;$ri++){
+            $row=$sh.Rows[$ri];$rn=$ri+1;[void]$sb.Append("<row r=`"$rn`">")
+            for($ci=0;$ci -lt $row.Cells.Count;$ci++){
+                $cell=$row.Cells[$ci];$ref="$(ColRef $ci)$rn";$si=[int]$cell.S
+                $v=if($null -ne $cell.V){"$($cell.V)"}else{''}
+                $isNum=$false;$nd=0.0;if($v -match '^\-?[\d]+\.?[\d]*$'){$isNum=[double]::TryParse($v,[ref]$nd)}
+                if($isNum){[void]$sb.Append("<c r=`"$ref`" s=`"$si`"><v>$v</v></c>")}
+                else{[void]$sb.Append("<c r=`"$ref`" s=`"$si`" t=`"inlineStr`"><is><t>$(Esc $v)</t></is></c>")}
+            };[void]$sb.Append('</row>')
+        };[void]$sb.Append('</sheetData></worksheet>');$sb.ToString()
+    }
+
+    $sheets=[System.Collections.Generic.List[hashtable]]::new()
+    $res = $Analysis.Results
+
+    # ================================================================
+    # Sheet 1: 影響範囲一覧（メイン）
+    # ================================================================
+    Write-Host '  Sheet: 影響範囲一覧' -ForegroundColor Gray
+    $r1=[System.Collections.Generic.List[hashtable]]::new()
+    $r1.Add((MkRow @('影響範囲解析 - 参照箇所一覧') 8))
+    $r1.Add((MkRow @("解析: $(Get-Date -Format 'yyyy-MM-dd HH:mm') | モード変数: $($Analysis.ModeVars -join ', ')") 9))
+    $r1.Add((MkRow @('') 0))
+    $h1 = @('No.','対象','種別','ファイル','行','メソッド','参照種別','モードコンテキスト','分岐種別','該当コード')
+    $r1.Add((MkRow $h1 1))
+    $sorted = @($res | Sort-Object { $_.Target }, { $_.File }, { $_.Line })
+    for ($i = 0; $i -lt $sorted.Count; $i++) {
+        $r = $sorted[$i]; $alt = if ($i % 2 -eq 1) { 3 } else { 0 }
+        $codeSnip = $r.Code; if ($codeSnip.Length -gt 100) { $codeSnip = $codeSnip.Substring(0,100) + '...' }
+        $row = MkRow @($i+1, $r.Target, $r.TargetType, $r.File, $r.Line, $r.Method, $r.RefType, $r.ModeContext, $r.BranchType, $codeSnip) $alt
+        # 色分け: モード変数=黄, 分岐キー文字列=橙, 書込=赤
+        if ($r.TargetType -eq 'モード変数') { $row.Cells[1].S = 4 }
+        elseif ($r.TargetType -eq '分岐キー文字列') { $row.Cells[1].S = 7 }
+        if ($r.RefType -eq '書込(代入)') { $row.Cells[6].S = 5 }
+        elseif ($r.RefType -eq 'プロパティ設定') { $row.Cells[6].S = 7 }
+        if ($r.ModeContext -ne '共通(分岐外)' -and $r.ModeContext -ne '不明') { $row.Cells[7].S = 4 }
+        $r1.Add($row)
+    }
+    $sheets.Add(@{Name='①影響範囲一覧';Rows=$r1})
+
+    # ================================================================
+    # Sheet 2: 対象別サマリー
+    # ================================================================
+    Write-Host '  Sheet: 対象別サマリー' -ForegroundColor Gray
+    $r2=[System.Collections.Generic.List[hashtable]]::new()
+    $r2.Add((MkRow @('対象別 影響サマリー') 8))
+    $r2.Add((MkRow @('各オブジェクトの参照ファイル数・モード数を一覧化。影響度が高い順にソート。') 9))
+    $r2.Add((MkRow @('') 0))
+    $h2 = @('No.','対象','種別','参照総数','参照ファイル数','参照メソッド数','モードコンテキスト種類数','書込箇所数','呼出箇所数','影響度','参照ファイル一覧','モードコンテキスト一覧')
+    $r2.Add((MkRow $h2 1))
+
+    $grouped = $res | Group-Object { $_.Target }
+    $summaries = @($grouped | ForEach-Object {
+        $refs = $_.Group
+        $files = @($refs | ForEach-Object { $_.File } | Sort-Object -Unique)
+        $methods = @($refs | ForEach-Object { $_.Method } | Sort-Object -Unique)
+        $modes = @($refs | ForEach-Object { $_.ModeContext } | Where-Object { $_ -ne '共通(分岐外)' -and $_ -ne '不明' } | Sort-Object -Unique)
+        $writes = @($refs | Where-Object { $_.RefType -eq '書込(代入)' }).Count
+        $calls = @($refs | Where-Object { $_.RefType -eq '呼出' }).Count
+        $impact = $files.Count * 3 + $methods.Count + $modes.Count * 5 + $writes * 2
+        $ErrorActionPreference = 'Stop'
+
+# ============================================================
+# ファイル読み込み
+# ============================================================
+function Read-VBFile([string]$fp) {
+    foreach ($e in @('utf-8','shift_jis','Default')) {
+        try { return [IO.File]::ReadAllLines($fp,[Text.Encoding]::GetEncoding($e)) } catch { continue }
+    }
+    try { return [IO.File]::ReadAllLines($fp) } catch { return @() }
+}
+
+# ============================================================
+# 解析エンジン
+# ============================================================
+function Invoke-ImpactAnalysis {
+    param([string]$ProjectPath, [string[]]$Targets, [string[]]$ModeVars)
+
+    $allFiles = @(Get-ChildItem -Path $ProjectPath -Filter '*.vb' -Recurse -File |
+        Where-Object { $_.Name -notlike '*.Designer.vb' } | Sort-Object FullName)
+
+    Write-Host "  対象ファイル: $($allFiles.Count)" -ForegroundColor Gray
+
+    # ---- 全ファイル読み込み & 行データ構築 ----
+    $fileData = [ordered]@{}  # filename -> @{ Path; Lines; Code[] }
+    foreach ($f in $allFiles) {
+        $lines = Read-VBFile $f.FullName
+        $codeLines = @()
+        for ($i = 0; $i -lt $lines.Count; $i++) {
+            $raw = $lines[$i]
+            $code = ($raw -replace "'.*$", '').Trim()
+            $codeLines += @{ Raw = $raw; Code = $code; Num = $i + 1 }
+        }
+        $fileData[$f.Name] = @{ Path = $f.FullName; Lines = $lines; CodeLines = $codeLines }
+    }
+
+    # ---- モード変数の自動検出 ----
+    if (-not $ModeVars -or $ModeVars.Count -eq 0) {
+        Write-Host '  モード変数を自動検出中...' -ForegroundColor Gray
+        $modeVarCandidates = [System.Collections.Generic.HashSet[string]]::new([StringComparer]::OrdinalIgnoreCase)
+        # Public/Friend変数で、Select Case や 複数のIf分岐で参照されているものを検出
+        $reGV = [regex]::new('^\s*(Public|Friend)\s+(?:Shared\s+)?(?:Dim\s+|Const\s+)?(\w+)\s+As\s+','IgnoreCase')
+        $gvNames = [System.Collections.Generic.List[string]]::new()
+        foreach ($fd in $fileData.Values) {
+            foreach ($cl in $fd.CodeLines) {
+                $mg = $reGV.Match($cl.Code)
+                if ($mg.Success) { $gvNames.Add($mg.Groups[2].Value) }
+            }
+        }
+        # Select Case で参照されている変数 = モード変数の可能性大
+        $reSelect = [regex]::new('^\s*Select\s+Case\s+(\w+)', 'IgnoreCase')
+        foreach ($fd in $fileData.Values) {
+            foreach ($cl in $fd.CodeLines) {
+                $ms = $reSelect.Match($cl.Code)
+                if ($ms.Success) {
+                    $vn = $ms.Groups[1].Value
+                    if ($gvNames -contains $vn) { [void]$modeVarCandidates.Add($vn) }
+                }
+            }
+        }
+        # If で3回以上比較されているグローバル変数もモード変数候補
+        foreach ($vn in $gvNames) {
+            $ifCount = 0
+            foreach ($fd in $fileData.Values) {
+                foreach ($cl in $fd.CodeLines) {
+                    if ($cl.Code -match "If\s+.*\b$([regex]::Escape($vn))\b") { $ifCount++ }
+                }
+            }
+            if ($ifCount -ge 3) { [void]$modeVarCandidates.Add($vn) }
+        }
+        $ModeVars = @($modeVarCandidates)
+        if ($ModeVars.Count -gt 0) {
+            Write-Host "  検出モード変数: $($ModeVars -join ', ')" -ForegroundColor Cyan
+        } else {
+            Write-Host '  モード変数は自動検出されませんでした' -ForegroundColor Yellow
+        }
+    }
+
+    # ---- 文字列リテラル（分岐キー）の自動検出 ----
+    Write-Host '  文字列リテラル(分岐キー)を検出中...' -ForegroundColor Gray
+    $stringLiterals = [System.Collections.Generic.Dictionary[string,System.Collections.Generic.List[string]]]::new()
+    $reStr = [regex]::new('"([^"]+)"')
+    foreach ($fn in $fileData.Keys) {
+        $fd = $fileData[$fn]
+        foreach ($cl in $fd.CodeLines) {
+            foreach ($m in $reStr.Matches($cl.Code)) {
+                $sv = $m.Groups[1].Value
+                # Case文/If文内の文字列 or モード変数への代入内の文字列を分岐キーとみなす
+                $isBranchKey = ($cl.Code -match '^\s*Case\s+' -or $cl.Code -match '^\s*(?:Else)?If\s+')
+                $isModeAssign = $false
+                foreach ($mv in $ModeVars) {
+                    if ($cl.Code -match "\b$([regex]::Escape($mv))\s*=") { $isModeAssign = $true; break }
+                }
+                if ($isBranchKey -or $isModeAssign) {
+                    if (-not $stringLiterals.ContainsKey($sv)) {
+                        $stringLiterals[$sv] = [System.Collections.Generic.List[string]]::new()
+                    }
+                    if (-not $stringLiterals[$sv].Contains($fn)) { $stringLiterals[$sv].Add($fn) }
+                }
+            }
+        }
+    }
+    $detectedKeys = @($stringLiterals.Keys | Where-Object { $stringLiterals[$_].Count -ge 1 })
+    if ($detectedKeys.Count -gt 0) {
+        Write-Host "  検出分岐キー文字列: $($detectedKeys.Count) 件 ($($detectedKeys | Select-Object -First 5 | ForEach-Object {'"' + $_ + '"'} | Join-String -Separator ', ')...)" -ForegroundColor Cyan
+    }
+
+    # ---- ターゲット自動検出 (全体スキャンモード) ----
+    $isFullScan = (-not $Targets -or $Targets.Count -eq 0)
+    if ($isFullScan) {
+        Write-Host '  全体スキャンモード: オブジェクト自動検出中...' -ForegroundColor Cyan
+        $autoTargets = [System.Collections.Generic.HashSet[string]]::new([StringComparer]::OrdinalIgnoreCase)
+
+        # グローバル/Friend変数
+        $reGV2 = [regex]::new('^\s*(Public|Friend)\s+(?:Shared\s+)?(?:Dim\s+|Const\s+)?(\w+)\s+As\s+','IgnoreCase')
+        foreach ($fd in $fileData.Values) {
+            foreach ($cl in $fd.CodeLines) {
+                $mg = $reGV2.Match($cl.Code); if ($mg.Success) { [void]$autoTargets.Add($mg.Groups[2].Value) }
+            }
+        }
+        # Public メソッド
+        $rePM = [regex]::new('^\s*Public\s+(?:Shared\s+)?(?:Overrides\s+)?(?:Sub|Function)\s+(\w+)', 'IgnoreCase')
+        foreach ($fd in $fileData.Values) {
+            foreach ($cl in $fd.CodeLines) {
+                $mm = $rePM.Match($cl.Code); if ($mm.Success) { [void]$autoTargets.Add($mm.Groups[1].Value) }
+            }
+        }
+        # WithEvents コントロール
+        $reCtrl = [regex]::new('Friend\s+WithEvents\s+(\w+)\s+As\s+', 'IgnoreCase')
+        # Designer ファイルも読む
+        $designerFiles = @(Get-ChildItem -Path $ProjectPath -Filter '*.Designer.vb' -Recurse -File)
+        foreach ($df in $designerFiles) {
+            $dlines = Read-VBFile $df.FullName
+            foreach ($dl in $dlines) {
+                $mc = $reCtrl.Match($dl); if ($mc.Success) { [void]$autoTargets.Add($mc.Groups[1].Value) }
+            }
+        }
+        # 分岐キー文字列
+        foreach ($sk in $detectedKeys) { [void]$autoTargets.Add($sk) }
+        # モード変数
+        foreach ($mv in $ModeVars) { [void]$autoTargets.Add($mv) }
+
+        $Targets = @($autoTargets | Sort-Object)
+        Write-Host "  自動検出ターゲット: $($Targets.Count) 件" -ForegroundColor Cyan
+    }
+
+    # ---- 各ターゲットの影響範囲解析 ----
+    Write-Host "  影響範囲解析中... ($($Targets.Count) 件)" -ForegroundColor Gray
+
+    $results = [System.Collections.Generic.List[hashtable]]::new()
+
+    # メソッド境界マップ構築: filename -> @( @{Class;Method;Start;End} )
+    $methodMap = [ordered]@{}
+    $reMethod = [regex]::new('^\s*(Public|Private|Protected|Friend)?\s*(?:Shared\s+)?(?:Overrides\s+)?(?:Sub|Function)\s+(\w+)', 'IgnoreCase')
+    $reEndMethod = [regex]::new('^\s*End\s+(Sub|Function)', 'IgnoreCase')
+    $reClass = [regex]::new('^\s*(?:Public|Private|Friend|Protected)?\s*(?:Partial\s+)?(?:Class|Module|Structure)\s+(\w+)', 'IgnoreCase')
+    foreach ($fn in $fileData.Keys) {
+        $fd = $fileData[$fn]; $methods = [System.Collections.Generic.List[hashtable]]::new()
+        $curClass = ''; $curMethod = $null
+        foreach ($cl in $fd.CodeLines) {
+            $mc = $reClass.Match($cl.Code); if ($mc.Success) { $curClass = $mc.Groups[1].Value }
+            $mm = $reMethod.Match($cl.Code)
+            if ($mm.Success) { $curMethod = @{ Class = $curClass; Method = $mm.Groups[2].Value; Start = $cl.Num; End = $cl.Num } }
+            $me = $reEndMethod.Match($cl.Code)
+            if ($me.Success -and $curMethod) { $curMethod.End = $cl.Num; $methods.Add($curMethod); $curMethod = $null }
+        }
+        $methodMap[$fn] = $methods
+    }
+
+    # メソッド名を行番号から逆引き
+    function Get-MethodAt([string]$fileName, [int]$lineNum) {
+        $methods = $methodMap[$fileName]
+        if (-not $methods) { return '[トップレベル]' }
+        foreach ($m in $methods) {
+            if ($lineNum -ge $m.Start -and $lineNum -le $m.End) { return "$($m.Class).$($m.Method)" }
+        }
+        return '[トップレベル]'
+    }
+
+    # モード分岐コンテキスト判定: 行がどのモード(分岐キー)の中にあるか
+    function Get-ModeContext([string]$fileName, [int]$lineNum) {
+        $fd = $fileData[$fileName]
+        if (-not $fd) { return '不明' }
+        # 直近のSelect Case/If文を遡って、どのCase/条件下かを判定
+        $contexts = [System.Collections.Generic.List[string]]::new()
+        $inSelect = $false; $selectVar = ''; $lastCase = ''
+        for ($i = 0; $i -lt $fd.CodeLines.Count; $i++) {
+            $cl = $fd.CodeLines[$i]
+            if ($cl.Num -gt $lineNum) { break }
+
+            # Select Case 開始
+            $ms = [regex]::Match($cl.Code, '^\s*Select\s+Case\s+(.+)', 'IgnoreCase')
+            if ($ms.Success) {
+                $sv = $ms.Groups[1].Value.Trim()
+                $isModeSelect = $false
+                foreach ($mv in $ModeVars) { if ($sv -match "\b$([regex]::Escape($mv))\b") { $isModeSelect = $true; break } }
+                if ($isModeSelect) { $inSelect = $true; $selectVar = $sv; $lastCase = '' }
+            }
+            if ($inSelect) {
+                $mc = [regex]::Match($cl.Code, '^\s*Case\s+(.+)', 'IgnoreCase')
+                if ($mc.Success -and -not $cl.Code.Trim().ToLower().StartsWith('select')) {
+                    $lastCase = $mc.Groups[1].Value.Trim()
+                }
+            }
+            $me = [regex]::Match($cl.Code, '^\s*End\s+Select', 'IgnoreCase')
+            if ($me.Success) { $inSelect = $false }
+
+            # If文でモード変数を比較
+            $mIf = [regex]::Match($cl.Code, '^\s*(?:Else)?If\s+(.+?)\s+Then', 'IgnoreCase')
+            if ($mIf.Success) {
+                $cond = $mIf.Groups[1].Value
+                foreach ($mv in $ModeVars) {
+                    if ($cond -match "\b$([regex]::Escape($mv))\b") {
+                        $lastCase = $cond.Trim()
+                        break
+                    }
+                }
+            }
+        }
+
+        if ($lastCase) { return $lastCase }
+        if ($inSelect -and $selectVar) { return "Select($selectVar) 内" }
+        return '共通(分岐外)'
+    }
+
+    # ---- ターゲット別の参照箇所を収集 ----
+    foreach ($tgt in $Targets) {
+        $isStringLiteral = $detectedKeys -contains $tgt
+        $isModeVariable = $ModeVars -contains $tgt
+
+        foreach ($fn in $fileData.Keys) {
+            $fd = $fileData[$fn]
+            foreach ($cl in $fd.CodeLines) {
+                $code = $cl.Code
+                if ([string]::IsNullOrEmpty($code)) { continue }
+
+                $found = $false
+                $matchType = ''
+
+                if ($isStringLiteral) {
+                    # 文字列リテラル: ダブルクォート内で完全一致
+                    if ($code -match "`"$([regex]::Escape($tgt))`"") {
+                        $found = $true; $matchType = '文字列リテラル'
+                    }
+                } else {
+                    # 変数/メソッド/コントロール: 単語境界マッチ
+                    if ($code -match "\b$([regex]::Escape($tgt))\b") {
+                        $found = $true
+                        # 参照種別を判定
+                        if ($code -match "\b$([regex]::Escape($tgt))\s*=(?!=)") { $matchType = '書込(代入)' }
+                        elseif ($code -match "\b$([regex]::Escape($tgt))\s*\(") { $matchType = '呼出' }
+                        elseif ($code -match "\b$([regex]::Escape($tgt))\.\w+\s*=") { $matchType = 'プロパティ設定' }
+                        elseif ($code -match "\b$([regex]::Escape($tgt))\.\w+") { $matchType = 'プロパティ参照' }
+                        elseif ($code -match '^\s*(Public|Private|Friend|Protected)?\s*(?:Shared\s+)?(?:Dim\s+|Const\s+)?'+ [regex]::Escape($tgt) + '\s+As\s+') { $matchType = '宣言' }
+                        elseif ($code -match '^\s*(?:Public|Private|Protected|Friend)?\s*(?:Sub|Function)\s+' + [regex]::Escape($tgt)) { $matchType = 'メソッド定義' }
+                        else { $matchType = '参照(読取)' }
+                    }
+                }
+
+                if ($found) {
+                    $methodName = Get-MethodAt $fn $cl.Num
+                    $modeCtx = Get-ModeContext $fn $cl.Num
+
+                    # 分岐種別判定
+                    $branchType = '-'
+                    if ($code -match '^\s*Select\s+Case') { $branchType = 'Select Case' }
+                    elseif ($code -match '^\s*Case\s+') { $branchType = 'Case' }
+                    elseif ($code -match '^\s*(?:Else)?If\s+') { $branchType = 'If' }
+
+                    # ターゲット種別
+                    $tgtType = if ($isStringLiteral) { '分岐キー文字列' }
+                               elseif ($isModeVariable) { 'モード変数' }
+                               elseif ($code -match "^\s*(?:Public|Private)\s+(?:Sub|Function)\s+$([regex]::Escape($tgt))") { 'メソッド' }
+                               elseif ($code -match "WithEvents\s+$([regex]::Escape($tgt))") { 'コントロール' }
+                               else { '変数/その他' }
+
+                    $results.Add(@{
+                        Target      = $tgt
+                        TargetType  = $tgtType
+                        File        = $fn
+                        Line        = $cl.Num
+                        Method      = $methodName
+                        RefType     = $matchType
+                        ModeContext = $modeCtx
+                        BranchType  = $branchType
+                        Code        = $cl.Raw.Trim()
+                    })
+                }
+            }
+        }
+    }
+
+    Write-Host "  検出参照: $($results.Count) 件" -ForegroundColor Cyan
+
+    return @{
+        Results     = $results
+        Targets     = $Targets
+        ModeVars    = $ModeVars
+        StringKeys  = $detectedKeys
+        FileData    = $fileData
+        MethodMap   = $methodMap
+    }
+}
+
+# ============================================================
+# OpenXML Excel 出力
+# ============================================================
+function Write-XlsxReport {
+    param([hashtable]$Analysis, [string]$OutputPath)
+
+    Add-Type -AssemblyName System.IO.Compression
+    Add-Type -AssemblyName System.IO.Compression.FileSystem
+
     function Esc([string]$s) { if(!$s){return ''}; $s.Replace('&','&amp;').Replace('<','&lt;').Replace('>','&gt;').Replace('"','&quot;') }
     function ColRef([int]$c) { $r='';$c++;while($c -gt 0){$c--;$r=[char](65+($c%26))+$r;$c=[math]::Floor($c/26)};$r }
     function MkRow([object[]]$v,[int]$s) { $cells=[System.Collections.Generic.List[hashtable]]::new(); foreach($val in $v){$cells.Add(@{V=$val;S=$s})}; @{Cells=$cells} }
