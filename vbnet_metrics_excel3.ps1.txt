@@ -154,6 +154,201 @@ function New-XlsxReport([VBNetParser]$P, [string]$Out) {
     Add-Type -AssemblyName System.IO.Compression
     Add-Type -AssemblyName System.IO.Compression.FileSystem
 
+    function Esc([string]$s) {
+        if(!$s){return ''}
+        $cleaned = [Text.StringBuilder]::new($s.Length)
+        foreach ($ch in $s.ToCharArray()) {
+            $code = [int]$ch
+            if ($code -eq 0x9 -or $code -eq 0xA -or $code -eq 0xD -or ($code -ge 0x20 -and $code -le 0xD7FF) -or ($code -ge 0xE000 -and $code -le 0xFFFD)) {
+                [void]$cleaned.Append($ch)
+            }
+        }
+        return $cleaned.ToString().Replace('&','&amp;').Replace('<','&lt;').Replace('>','&gt;').Replace('"','&quot;')
+    }
+    function ColRef([int]$c) { $r=''; $c++; while($c -gt 0){$c--;$r=[char](65+($c%26))+$r;$c=[math]::Floor($c/26)}; $r }
+
+    function MkRow([object[]]$vals,[int]$sty) {
+        $cells=[System.Collections.Generic.List[hashtable]]::new()
+        foreach($v in $vals){ $cells.Add(@{V=$v;S=$sty}) }
+        @{Cells=$cells}
+    }
+
+    function SheetXml([hashtable]$sh) {
+        $sb=[Text.StringBuilder]::new()
+        [void]$sb.Append('<?xml version="1.0" encoding="UTF-8" standalone="yes"?><worksheet xmlns="http://schemas.openxmlformats.org/spreadsheetml/2006/main">')
+        [void]$sb.Append('<sheetData>')
+        for($ri=0;$ri -lt $sh.Rows.Count;$ri++){
+            $row=$sh.Rows[$ri]; $rn=$ri+1; [void]$sb.Append("<row r=`"$rn`">")
+            for($ci=0;$ci -lt $row.Cells.Count;$ci++){
+                $cell=$row.Cells[$ci]; $ref="$(ColRef $ci)$rn"; $si=[int]$cell.S
+                $v=if($null -ne $cell.V){"$($cell.V)"}else{''}
+                $isNum=$false; $nd=0.0; if($v -match '^\-?[\d]+\.?[\d]*$'){$isNum=[double]::TryParse($v,[ref]$nd)}
+                if($isNum){[void]$sb.Append("<c r=`"$ref`" s=`"$si`"><v>$v</v></c>")}
+                else{[void]$sb.Append("<c r=`"$ref`" s=`"$si`" t=`"inlineStr`"><is><t>$(Esc $v)</t></is></c>")}
+            }
+            [void]$sb.Append('</row>')
+        }
+        [void]$sb.Append('</sheetData></worksheet>')
+        $sb.ToString()
+    }
+
+    $sheets=[System.Collections.Generic.List[hashtable]]::new()
+
+    # ---- Metrics ----
+    $nd=@($P.FileMetrics|Where-Object{$_.FileType -ne 'Designer'})
+    $total=[int](($nd|Measure-Object -Property TotalLines -Sum).Sum)
+    $code=[int](($nd|Measure-Object -Property CodeLines -Sum).Sum)
+    $comment=[int](($nd|Measure-Object -Property CommentLines -Sum).Sum)
+    $nm=$P.Methods.Count
+    $avgCC=if($nm -gt 0){[math]::Round(($P.Methods|Measure-Object -Property CyclomaticComplexity -Average).Average,1)}else{0}
+    $maxCC=if($nm -gt 0){($P.Methods|Measure-Object -Property CyclomaticComplexity -Maximum).Maximum}else{0}
+    $maxNest=if($nm -gt 0){($P.Methods|Measure-Object -Property MaxNestDepth -Maximum).Maximum}else{0}
+    $hiM=@($P.Methods|Where-Object{$_.CyclomaticComplexity -gt 10}).Count
+    $bigM=@($P.Methods|Where-Object{$_.LineCount -gt 100}).Count
+    $brTotal=[int](($nd|Measure-Object -Property BranchCount -Sum).Sum)
+    $cRate=if($code -gt 0){[math]::Round($comment/$code*100,1)}else{0}
+    $hiGV=@($P.GlobalVars.Values|Where-Object{$_.RefFiles.Count -ge 3}).Count
+
+    # ---- Sheet 1: サマリー ----
+    Write-Host '  Sheet: サマリー' -ForegroundColor Gray
+    $r1=[System.Collections.Generic.List[hashtable]]::new()
+    $r1.Add((MkRow @('VB.NET CE メトリクス サマリー') 8))
+    $r1.Add((MkRow @("解析: $(Get-Date -Format 'yyyy-MM-dd HH:mm') | 対象: $($P.ProjectPath)") 9))
+    $r1.Add((MkRow @('') 0))
+    foreach($item in @(
+        @('■ コード量',''), @('ファイル数',$nd.Count), @('コード行',$code), @('コメント行',$comment), @('コメント率',"$cRate%"), @('メソッド数',$nm),
+        @('',''), @('■ 複雑度',''), @('平均CC',$avgCC), @('最大CC',$maxCC), @('最大ネスト',$maxNest), @('高リスクメソッド(CC>10)',$hiM), @('巨大メソッド(100行超)',$bigM), @('総分岐数',$brTotal),
+        @('',''), @('■ グローバル変数',''), @('GV数',$P.GlobalVars.Count), @('高リスクGV(3file以上)',$hiGV),
+        @('',''), @('■ フォーム',''), @('フォーム数',$P.Forms.Count), @('動的変更総数',[int](($P.Forms.Values|ForEach-Object{$_.DynamicControls.Count}|Measure-Object -Sum).Sum))
+    )){
+        $sty=if("$($item[0])".StartsWith('■')){8}else{0}
+     [System.Collections.Generic.List[string]]$CallsTo = [System.Collections.Generic.List[string]]::new()
+    [System.Collections.Generic.List[string]]$GVRead = [System.Collections.Generic.List[string]]::new()
+    [System.Collections.Generic.List[string]]$GVWrite = [System.Collections.Generic.List[string]]::new()
+    [bool]$HasDBAccess = $false; [bool]$HasNetAccess = $false
+}
+class GlobalVarInfo {
+    [string]$Name; [string]$VarType; [string]$DeclaredIn; [string]$Modifier; [string]$InitialValue = ''
+    [System.Collections.Generic.List[string]]$SetLocations = [System.Collections.Generic.List[string]]::new()
+    [System.Collections.Generic.List[string]]$ReadLocations = [System.Collections.Generic.List[string]]::new()
+    [System.Collections.Generic.HashSet[string]]$RefFunctions = [System.Collections.Generic.HashSet[string]]::new()
+    [System.Collections.Generic.HashSet[string]]$RefFiles = [System.Collections.Generic.HashSet[string]]::new()
+}
+class FormInfo {
+    [string]$Name; [string]$FilePath
+    [System.Collections.Generic.List[string]]$Controls = [System.Collections.Generic.List[string]]::new()
+    [System.Collections.Generic.List[hashtable]]$DynamicControls = [System.Collections.Generic.List[hashtable]]::new()
+    [System.Collections.Generic.List[string]]$EventHandlers = [System.Collections.Generic.List[string]]::new()
+    [System.Collections.Generic.List[string]]$NavigatesTo = [System.Collections.Generic.List[string]]::new()
+}
+class BranchInfo {
+    [string]$FilePath; [string]$MethodName; [int]$LineNumber
+    [string]$BranchType; [string]$Condition; [string]$Target = ''; [int]$NestDepth
+}
+class FileMetrics {
+    [string]$FilePath; [string]$FileName; [string]$FileType
+    [int]$TotalLines = 0; [int]$CodeLines = 0; [int]$CommentLines = 0; [int]$BlankLines = 0
+    [int]$ClassCount = 0; [int]$MethodCount = 0; [int]$MaxMethodLines = 0
+    [double]$AvgMethodLines = 0.0; [int]$BranchCount = 0; [int]$MaxNestDepth = 0; [int]$GVRefCount = 0
+}
+#endregion
+
+#region パーサー
+class VBNetParser {
+    [string]$ProjectPath
+    [System.Collections.Generic.List[string]]$Files = [System.Collections.Generic.List[string]]::new()
+    [System.Collections.Generic.List[FileMetrics]]$FileMetrics = [System.Collections.Generic.List[FileMetrics]]::new()
+    [System.Collections.Generic.List[MethodInfo]]$Methods = [System.Collections.Generic.List[MethodInfo]]::new()
+    [System.Collections.Generic.Dictionary[string,GlobalVarInfo]]$GlobalVars = [System.Collections.Generic.Dictionary[string,GlobalVarInfo]]::new()
+    [System.Collections.Generic.Dictionary[string,FormInfo]]$Forms = [System.Collections.Generic.Dictionary[string,FormInfo]]::new()
+    [System.Collections.Generic.List[BranchInfo]]$Branches = [System.Collections.Generic.List[BranchInfo]]::new()
+    [hashtable]$AllLines = @{}
+    static [string[]]$DBKw = @('sqlceconnection','sqlcecommand','sqlcedatareader','sqlcedataadapter','sqlconnection','sqlcommand','sqldatareader','sqldataadapter','executenonquery','executereader','executescalar','oledbconnection','oledbcommand','select ','insert ','update ','delete ','create table','.open()','.fill(','dataset','datatable')
+    static [string[]]$NetKw = @('httpwebrequest','httpwebresponse','webclient','webrequest','tcpclient','udpclient','socket','serialport','system.net','.getresponse(','.downloadstring(','.uploadstring(')
+    VBNetParser([string]$p) { $this.ProjectPath = $p }
+    [void]DiscoverFiles() { Get-ChildItem -Path $this.ProjectPath -Filter '*.vb' -Recurse -File | ForEach-Object { $this.Files.Add($_.FullName) }; $this.Files.Sort() }
+    [string[]]ReadFile([string]$fp) { foreach ($e in @('utf-8','shift_jis','Default')) { try { return [IO.File]::ReadAllLines($fp,[Text.Encoding]::GetEncoding($e)) } catch { continue } }; try { return [IO.File]::ReadAllLines($fp) } catch { return @() } }
+    [string]ClassifyFile([string]$fp,[string]$ct) { $fn=[IO.Path]::GetFileName($fp).ToLower(); if($fn.EndsWith('.designer.vb')){'Designer'} else { $cl=$ct.ToLower(); if($cl.Contains('inherits system.windows.forms.form') -or $cl.Contains('inherits form')){'Form'} elseif($cl.Contains('inherits system.windows.forms.usercontrol') -or $cl.Contains('inherits usercontrol')){'UserControl'} elseif($cl -match '(?m)^\s*module\s+'){'Module'} else{'Class'} } }
+    [void]CollectGlobalVars() {
+        $reGV=[regex]::new('^\s*(Public|Friend)\s+(Shared\s+)?(Dim\s+|Const\s+)?(\w+)\s+As\s+(\w[\w\(\)]*)','IgnoreCase'); $reC=[regex]::new('^\s*(Public|Private|Friend|Protected)?\s*(Partial\s+)?(Class|Module|Structure)\s+(\w+)','IgnoreCase'); $reEC=[regex]::new('^\s*End\s+(Class|Module|Structure)','IgnoreCase')
+        foreach($fp in $this.Files){ $lines=$this.AllLines[$fp]; if(-not $lines){continue}; $fn=[IO.Path]::GetFileName($fp); $inC=$false; $cc=''
+            foreach($line in $lines){ $s=$line.Trim(); $mc=$reC.Match($s); if($mc.Success){$inC=$true;$cc=$mc.Groups[4].Value;continue}; if($reEC.IsMatch($s)){$inC=$false}; $mg=$reGV.Match($s)
+                if($mg.Success -and $inC){ $vn=$mg.Groups[4].Value; $k=$vn.ToLower(); if(-not $this.GlobalVars.ContainsKey($k)){ $gv=[GlobalVarInfo]::new(); $gv.Name=$vn; $gv.VarType=$mg.Groups[5].Value; $gv.DeclaredIn="$fn ($cc)"; $gv.Modifier=$mg.Groups[1].Value; $im=[regex]::Match($s,'=\s*(.+)$'); if($im.Success){$gv.InitialValue=$im.Groups[1].Value.Trim()}; $this.GlobalVars[$k]=$gv } } } }
+    }
+    [void]Analyze() {
+        foreach($fp in $this.Files){$this.AllLines[$fp]=$this.ReadFile($fp)}; $this.CollectGlobalVars()
+        foreach($fp in $this.Files){ $lines=$this.AllLines[$fp]; $ct=$lines -join "`n"; $fn=[IO.Path]::GetFileName($fp); $ft=$this.ClassifyFile($fp,$ct)
+            $fm=[FileMetrics]::new(); $fm.FilePath=$fp; $fm.FileName=$fn; $fm.FileType=$ft; $this.CalcLines($lines,$fm)
+            if($ft -ne 'Designer'){$this.ParseMethods($fp,$lines,$fm); $this.ScanGVRefs($fp,$lines,$fm); if($ft -in @('Form','UserControl')){$this.ParseForm($fp,$lines,$ct)}}; $this.FileMetrics.Add($fm) }
+    }
+    [void]CalcLines([string[]]$lines,[FileMetrics]$fm) { $fm.TotalLines=$lines.Count; foreach($l in $lines){$s=$l.Trim(); if([string]::IsNullOrEmpty($s)){$fm.BlankLines++} elseif($s.StartsWith("'") -or $s.ToUpper().StartsWith('REM ')){$fm.CommentLines++} else{$fm.CodeLines++}} }
+    [void]ParseMethods([string]$fp,[string[]]$lines,[FileMetrics]$fm) {
+        $fn=[IO.Path]::GetFileName($fp)
+        $reC=[regex]::new('^\s*(Public|Private|Friend|Protected)?\s*(Partial\s+)?(Class|Module|Structure)\s+(\w+)','IgnoreCase')
+        $reM=[regex]::new('^\s*(Public|Private|Protected|Friend)?\s*(Shared\s+)?(Overrides\s+)?(Sub|Function)\s+(\w+)\s*\(([^)]*)\)(?:\s+As\s+(\w+))?','IgnoreCase')
+        $reEB=[regex]::new('^\s*End\s+(Sub|Function|Class|Module|Structure|Property|If|Select|While|For|Try|With|Using|SyncLock)','IgnoreCase')
+        $reIf=[regex]::new('^\s*If\s+(.+?)\s+Then\s*$','IgnoreCase'); $reEI=[regex]::new('^\s*ElseIf\s+(.+?)\s+Then','IgnoreCase')
+        $reSC=[regex]::new('^\s*Select\s+Case\s+(.+)','IgnoreCase'); $reCs=[regex]::new('^\s*Case\s+(.+)','IgnoreCase')
+        $reFor=[regex]::new('^\s*For\s+','IgnoreCase'); $reFE=[regex]::new('^\s*For\s+Each\s+','IgnoreCase')
+        $reW=[regex]::new('^\s*(?:While|Do\s+While|Do\s+Until)\s+','IgnoreCase')
+        $reT=[regex]::new('^\s*Try\s*$','IgnoreCase'); $reCa=[regex]::new('^\s*Catch\b','IgnoreCase')
+        $reCP=[regex]::new('(\w+)\.(Text|Visible|Enabled|BackColor|ForeColor|Caption|Name|DataSource|Columns)\s*=\s*(.+)','IgnoreCase')
+        $cc=''; [System.Collections.Generic.List[object]]$ms=@(); $n=0
+        for($i=0;$i -lt $lines.Count;$i++){
+            $code=($lines[$i] -replace "'.*$",'').Trim(); if([string]::IsNullOrEmpty($code)){continue}; $ln=$i+1
+            $mc=$reC.Match($code); if($mc.Success){$cc=$mc.Groups[4].Value;$fm.ClassCount++;continue}
+            $mm=$reM.Match($code)
+            if($mm.Success){ $mi=[MethodInfo]::new(); $mi.Name=$mm.Groups[5].Value; $mi.FilePath=$fn; $mi.ClassName=$cc
+                $mi.AccessModifier=if($mm.Groups[1].Value){$mm.Groups[1].Value}else{'Private'}
+                $mi.ReturnType=if($mm.Groups[7].Value){$mm.Groups[7].Value}elseif($mm.Groups[4].Value -ieq 'sub'){'Void'}else{'?'}
+                $mi.Params=($mm.Groups[6].Value ?? '').Trim(); $mi.StartLine=$ln; $mi.EndLine=$ln
+                $ms.Add(@{M=$mi;B=$n}); $n++; $fm.MethodCount++; continue }
+            $cm=if($ms.Count -gt 0){$ms[-1].M}else{$null}
+            $mIf=$reIf.Match($code)
+            if($mIf.Success){ $n++; if($cm){$cond=$mIf.Groups[1].Value; $cm.BranchCount++; $cm.CyclomaticComplexity++; $fm.BranchCount++; $bi=[BranchInfo]::new(); $bi.FilePath=$fn; $bi.MethodName=$cm.Name; $bi.LineNumber=$ln; $bi.BranchType='If'; $bi.Condition=$cond.Substring(0,[Math]::Min($cond.Length,120)); $bi.NestDepth=$n; $this.Branches.Add($bi); $cm.CyclomaticComplexity+=[regex]::Matches($cond,'\b(And|Or|AndAlso|OrElse)\b','IgnoreCase').Count} }
+            elseif($reEI.IsMatch($code)){ if($cm){$cond=$reEI.Match($code).Groups[1].Value; $cm.BranchCount++; $cm.CyclomaticComplexity++; $fm.BranchCount++; $bi=[BranchInfo]::new(); $bi.FilePath=$fn; $bi.MethodName=$cm.Name; $bi.LineNumber=$ln; $bi.BranchType='ElseIf'; $bi.Condition=$cond.Substring(0,[Math]::Min($cond.Length,120)); $bi.NestDepth=$n; $this.Branches.Add($bi)} }
+            elseif($reSC.IsMatch($code)){ $n++; if($cm){$cond=$reSC.Match($code).Groups[1].Value; $cm.BranchCount++; $cm.CyclomaticComplexity++; $fm.BranchCount++; $bi=[BranchInfo]::new(); $bi.FilePath=$fn; $bi.MethodName=$cm.Name; $bi.LineNumber=$ln; $bi.BranchType='Select Case'; $bi.Condition=$cond.Substring(0,[Math]::Min($cond.Length,120)); $bi.NestDepth=$n; $this.Branches.Add($bi)} }
+            elseif($reCs.IsMatch($code) -and -not $code.Trim().ToLower().StartsWith('select')){ if($cm -and -not $code.Trim().ToLower().StartsWith('case else')){$cm.CyclomaticComplexity++} }
+            elseif($reFor.IsMatch($code) -or $reFE.IsMatch($code)){$n++;if($cm){$cm.CyclomaticComplexity++}}
+            elseif($reW.IsMatch($code)){$n++;if($cm){$cm.CyclomaticComplexity++}}
+            elseif($reT.IsMatch($code)){$n++} elseif($reCa.IsMatch($code)){if($cm){$cm.CyclomaticComplexity++}}
+            if($ms.Count -gt 0){$rel=$n - $ms[-1].B - 1; if($rel -gt $cm.MaxNestDepth){$cm.MaxNestDepth=$rel}}
+            if($cm){$cp=$reCP.Match($code); if($cp.Success){for($bi_i=$this.Branches.Count-1;$bi_i -ge 0;$bi_i--){$b=$this.Branches[$bi_i]; if($b.FilePath -eq $fn -and $b.MethodName -eq $cm.Name -and [string]::IsNullOrEmpty($b.Target)){$b.Target="$($cp.Groups[1].Value).$($cp.Groups[2].Value)";break}}}
+                $cl=$code.ToLower(); foreach($kw in [VBNetParser]::DBKw){if($cl.Contains($kw)){$cm.HasDBAccess=$true;break}}; foreach($kw in [VBNetParser]::NetKw){if($cl.Contains($kw)){$cm.HasNetAccess=$true;break}} }
+            $em=$reEB.Match($code); if($em.Success){$bt=$em.Groups[1].Value.ToLower(); if($bt -in @('sub','function') -and $ms.Count -gt 0){$entry=$ms[-1]; $mi=$entry.M; $ms.RemoveAt($ms.Count-1); $mi.EndLine=$ln; $mi.LineCount=$mi.EndLine-$mi.StartLine+1; $this.ScanBody($fp,$lines,$mi); $this.Methods.Add($mi)}; $n=[Math]::Max(0,$n-1)} }
+        $ml=$this.Methods|Where-Object{$_.FilePath -eq $fn}|ForEach-Object{$_.LineCount}; if($ml){$fm.MaxMethodLines=($ml|Measure-Object -Maximum).Maximum; $fm.AvgMethodLines=($ml|Measure-Object -Average).Average}
+        $ns=$this.Methods|Where-Object{$_.FilePath -eq $fn}|ForEach-Object{$_.MaxNestDepth}; if($ns){$fm.MaxNestDepth=($ns|Measure-Object -Maximum).Maximum}
+    }
+    [void]ScanBody([string]$fp,[string[]]$lines,[MethodInfo]$mi) {
+        $skip=[System.Collections.Generic.HashSet[string]]::new([string[]]@('if','while','for','select','case','catch','ctype','cstr','cint','cdbl','cbool','directcast','trycast','typeof','gettype','nothing','not','and','or'),[StringComparer]::OrdinalIgnoreCase)
+        $si=[Math]::Max(0,$mi.StartLine-1); $ei=[Math]::Min($mi.EndLine,$lines.Count)
+        for($li=$si;$li -lt $ei;$li++){$code=($lines[$li] -replace "'.*$",'').Trim(); if([string]::IsNullOrEmpty($code)){continue}; $loc="$($mi.FilePath):$($li+1)"
+            foreach($k in $this.GlobalVars.Keys){$gv=$this.GlobalVars[$k]; if($code -match "\b$([regex]::Escape($gv.Name))\b"){
+                if($code -match "\b$([regex]::Escape($gv.Name))\s*="){if(-not $mi.GVWrite.Contains($gv.Name)){$mi.GVWrite.Add($gv.Name)}; if(-not $gv.SetLocations.Contains($loc)){$gv.SetLocations.Add($loc)}}
+                else{if(-not $mi.GVRead.Contains($gv.Name)){$mi.GVRead.Add($gv.Name)}; if(-not $gv.ReadLocations.Contains($loc)){$gv.ReadLocations.Add($loc)}}
+                [void]$gv.RefFunctions.Add("$($mi.ClassName).$($mi.Name)"); [void]$gv.RefFiles.Add($mi.FilePath) }}
+            foreach($cm in [regex]::Matches($code,'(\w+\.\w+|\w+)\s*\(')){$call=$cm.Groups[1].Value; if(-not $skip.Contains($call) -and -not $mi.CallsTo.Contains($call)){$mi.CallsTo.Add($call)}} }
+    }
+    [void]ScanGVRefs([string]$fp,[string[]]$lines,[FileMetrics]$fm) { $c=0; foreach($l in $lines){$code=($l -replace "'.*$",'').Trim(); foreach($gv in $this.GlobalVars.Values){if($code -match "\b$([regex]::Escape($gv.Name))\b"){$c++}}}; $fm.GVRefCount=$c }
+    [void]ParseForm([string]$fp,[string[]]$lines,[string]$ct) {
+        $fn=[IO.Path]::GetFileName($fp); $formName=[IO.Path]::GetFileNameWithoutExtension($fn); $fi=[FormInfo]::new(); $fi.Name=$formName; $fi.FilePath=$fn
+        $r1=[regex]::new('(?:Me\.)?(\w+)\s*=\s*New\s+System\.Windows\.Forms\.(\w+)','IgnoreCase'); $r2=[regex]::new('Friend\s+WithEvents\s+(\w+)\s+As\s+(?:System\.Windows\.Forms\.)?(\w+)','IgnoreCase')
+        $rH=[regex]::new('(?:Private|Public|Protected)\s+Sub\s+(\w+_\w+)\s*\(','IgnoreCase'); $rS=[regex]::new('(\w+)\.(Show|ShowDialog)\b','IgnoreCase')
+        $rP=[regex]::new('(\w+)\.(Text|Visible|Enabled|BackColor|ForeColor|Caption|Name|DataSource|Columns)\s*=\s*(.+)','IgnoreCase')
+        $all=[System.Collections.Generic.List[string]]::new($lines); $dp=$fp -replace '\.vb$','.Designer.vb'; if(Test-Path $dp){$all.AddRange($this.ReadFile($dp))}
+        $ctrls=[System.Collections.Generic.HashSet[string]]::new(); foreach($l in $all){foreach($re in @($r1,$r2)){$m=$re.Match($l);if($m.Success){[void]$ctrls.Add("$($m.Groups[1].Value) ($($m.Groups[2].Value))")}}}; $fi.Controls.AddRange([string[]]($ctrls|Sort-Object))
+        foreach($l in $lines){$m=$rH.Match($l.Trim());if($m.Success){$fi.EventHandlers.Add($m.Groups[1].Value)};$m=$rS.Match($l);if($m.Success -and -not $fi.NavigatesTo.Contains($m.Groups[1].Value)){$fi.NavigatesTo.Add($m.Groups[1].Value)}}
+        for($li=0;$li -lt $lines.Count;$li++){$code=($lines[$li] -replace "'.*$",'').Trim(); $m=$rP.Match($code); if($m.Success){$val=$m.Groups[3].Value.Trim(); $fi.DynamicControls.Add(@{Control=$m.Groups[1].Value;Property=$m.Groups[2].Value;Value=$val.Substring(0,[Math]::Min($val.Length,60));Line=$li+1})}}
+        $this.Forms[$formName]=$fi
+    }
+}
+#endregion
+
+#region OpenXML xlsx 生成
+function New-XlsxReport([VBNetParser]$P, [string]$Out) {
+    Add-Type -AssemblyName System.IO.Compression
+    Add-Type -AssemblyName System.IO.Compression.FileSystem
+
     function Esc([string]$s) { if(!$s){return ''}; $s.Replace('&','&amp;').Replace('<','&lt;').Replace('>','&gt;').Replace('"','&quot;') }
     function ColRef([int]$c) { $r=''; $c++; while($c -gt 0){$c--;$r=[char](65+($c%26))+$r;$c=[math]::Floor($c/26)}; $r }
 
