@@ -1,41 +1,172 @@
-全対象を追跡し、モード別分岐の影響範囲を可視化するスクリプトを作ります。特に文字列リテラルによる分岐制御の追跡が肝です。
+VB.NET版です。文字列入力時の検証ロジック（不正日付・フォーマットチェック）も含めています。
 
-影響範囲解析スクリプトです。
+```vbnet
+Imports C1.Win.C1FlexGrid
+Imports System.Globalization
 
-**使い方：**
+Public Class Form1
 
-```powershell
-# ① 対象指定モード: 特定のオブジェクトの影響を調査
-.\vbnet_impact.ps1 -Path "C:\Projects\App" -Target "g_FuncMode","btnConfirm","入庫検品","CheckZaiko"
+    Private _dropDown As ToolStripDropDown
+    Private _monthCalendar As MonthCalendar
+    Private _editingRow As Integer = -1
+    Private _editingCol As Integer = -1
+    Private Const DateCol As Integer = 1
 
-# ② 全体スキャンモード: 全オブジェクトを自動検出して網羅的に一覧化
-.\vbnet_impact.ps1 -Path "C:\Projects\App"
+    ' 許容する日付フォーマット(必要に応じて増やす)
+    Private ReadOnly _dateFormats As String() = {
+        "yyyy/MM/dd",
+        "yyyy/M/d",
+        "yyyy-MM-dd",
+        "yyyyMMdd",
+        "yyyy.MM.dd"
+    }
 
-# ③ モード変数を明示指定（自動検出がうまくいかない場合）
-.\vbnet_impact.ps1 -Path "C:\Projects\App" -ModeVar "g_FuncMode","strKinou"
+    Private Sub Form1_Load(sender As Object, e As EventArgs) Handles MyBase.Load
+        InitFlexGrid()
+        InitCalendarPopup()
+    End Sub
+
+    Private Sub InitFlexGrid()
+        ' 日付列を文字列として設定
+        flexGrid.Cols(DateCol).DataType = GetType(String)
+        flexGrid.Cols(DateCol).Format = ""
+
+        ' ドロップダウンボタンのみ表示(ComboListを "..." にする)
+        flexGrid.Cols(DateCol).ComboList = "..."
+
+        ' イベント登録
+        AddHandler flexGrid.CellButtonClick, AddressOf FlexGrid_CellButtonClick
+        AddHandler flexGrid.ValidateEdit, AddressOf FlexGrid_ValidateEdit
+        AddHandler flexGrid.AfterEdit, AddressOf FlexGrid_AfterEdit
+    End Sub
+
+    Private Sub InitCalendarPopup()
+        _monthCalendar = New MonthCalendar With {
+            .MaxSelectionCount = 1
+        }
+        AddHandler _monthCalendar.DateSelected, AddressOf MonthCalendar_DateSelected
+
+        Dim host As New ToolStripControlHost(_monthCalendar) With {
+            .Margin = Padding.Empty,
+            .Padding = Padding.Empty,
+            .AutoSize = False,
+            .Size = _monthCalendar.Size
+        }
+
+        _dropDown = New ToolStripDropDown With {
+            .Padding = Padding.Empty,
+            .AutoSize = True
+        }
+        _dropDown.Items.Add(host)
+    End Sub
+
+    ''' <summary>
+    ''' ドロップダウンボタンクリック時にMonthCalendarをポップアップ表示
+    ''' </summary>
+    Private Sub FlexGrid_CellButtonClick(sender As Object, e As RowColEventArgs)
+        If e.Col <> DateCol Then Return
+
+        _editingRow = e.Row
+        _editingCol = e.Col
+
+        ' セルのスクリーン座標を取得
+        Dim rect = flexGrid.GetCellRect(e.Row, e.Col, False)
+        Dim screenPoint = flexGrid.PointToScreen(New Point(rect.Left, rect.Bottom))
+
+        ' 現在の値を初期選択
+        Dim cellValue = Convert.ToString(flexGrid(e.Row, e.Col))
+        Dim dt As DateTime
+        If TryParseDate(cellValue, dt) Then
+            _monthCalendar.SelectionStart = dt
+        Else
+            _monthCalendar.SelectionStart = DateTime.Today
+        End If
+
+        _dropDown.Show(screenPoint)
+    End Sub
+
+    Private Sub MonthCalendar_DateSelected(sender As Object, e As DateRangeEventArgs)
+        If _editingRow >= 0 AndAlso _editingCol >= 0 Then
+            flexGrid(_editingRow, _editingCol) = e.Start.ToString("yyyy/MM/dd")
+        End If
+        _dropDown.Close()
+    End Sub
+
+    ''' <summary>
+    ''' セル編集確定前の検証
+    ''' </summary>
+    Private Sub FlexGrid_ValidateEdit(sender As Object, e As ValidateEditEventArgs)
+        If e.Col <> DateCol Then Return
+
+        Dim input = Convert.ToString(flexGrid.Editor.Text)
+
+        ' 空文字は許容(必要に応じて変更)
+        If String.IsNullOrWhiteSpace(input) Then Return
+
+        Dim dt As DateTime
+        If Not TryParseDate(input, dt) Then
+            MessageBox.Show(
+                $"日付の形式が正しくありません。{Environment.NewLine}" &
+                $"例: 2026/04/17, 20260417",
+                "入力エラー",
+                MessageBoxButtons.OK,
+                MessageBoxIcon.Warning)
+            e.Cancel = True ' 編集モードを継続させる
+        End If
+    End Sub
+
+    ''' <summary>
+    ''' 編集確定後に表示フォーマットを正規化
+    ''' </summary>
+    Private Sub FlexGrid_AfterEdit(sender As Object, e As RowColEventArgs)
+        If e.Col <> DateCol Then Return
+
+        Dim input = Convert.ToString(flexGrid(e.Row, e.Col))
+        If String.IsNullOrWhiteSpace(input) Then Return
+
+        Dim dt As DateTime
+        If TryParseDate(input, dt) Then
+            ' 表示を統一フォーマットに正規化
+            flexGrid(e.Row, e.Col) = dt.ToString("yyyy/MM/dd")
+        End If
+    End Sub
+
+    ''' <summary>
+    ''' 複数フォーマットを許容する日付パース
+    ''' </summary>
+    Private Function TryParseDate(input As String, ByRef result As DateTime) As Boolean
+        If String.IsNullOrWhiteSpace(input) Then
+            result = DateTime.MinValue
+            Return False
+        End If
+
+        ' 指定フォーマットで厳密にパース
+        If DateTime.TryParseExact(
+            input.Trim(),
+            _dateFormats,
+            CultureInfo.InvariantCulture,
+            DateTimeStyles.None,
+            result) Then
+            Return True
+        End If
+
+        ' フォールバック: 現在カルチャで緩くパース
+        If DateTime.TryParse(input.Trim(), result) Then
+            Return True
+        End If
+
+        Return False
+    End Function
+
+End Class
 ```
 
-**出力される5シート：**
+## 検証ロジックのポイント
 
-| シート | 内容 |
-|---|---|
-| **①影響範囲一覧** | 全参照箇所を行単位で一覧。「どのファイルの何行目で、どのメソッド内で、どのモード分岐の中で参照されているか」が分かる。書込=赤, モード変数=黄, 分岐キー文字列=橙 |
-| **②対象別サマリー** | オブジェクトごとに参照ファイル数・モード数・書込数を集計し、影響度スコアで降順ソート。「このオブジェクトを変えたら何箇所に影響するか」が一目で分かる |
-| **③モード横断マトリクス** | 行=オブジェクト, 列=モードコンテキスト。○=参照, ●=書込。**ある機能だけ変えたいのに他の機能モードでも●が付いているオブジェクトが要注意** |
-| **④分岐キー文字列** | `"入庫検品"`, `"出庫ピッキング"` 等の文字列リテラルが Case文/If文でどこで使われているかを全箇所列挙 |
-| **⑤変更チェックリスト** | チェック欄付きの変更前確認リスト。「3モードで参照、5ファイルに分散、書込2箇所 → 全モードテスト必要」等の注意点を自動生成 |
+**`TryParseDate` メソッド** は二段構えになっています。まず`_dateFormats`配列に列挙した形式で`TryParseExact`による厳密マッチを試みます。これで`2026/04/17`や`20260417`といった業務でよく使われる形式を確実に判定できます。マッチしなければ`TryParse`で現在カルチャでの緩いパースにフォールバックします。`2026/02/30`のような実在しない日付はどちらのメソッドもFalseを返すので、自動的にエラーになります。
 
-**核心機能 — モードコンテキスト追跡：**
+**`ValidateEdit` イベント** は編集確定の直前に発火します。`e.Cancel = True`にすると編集モードが継続されるので、ユーザーは再入力できます。空文字を許容するかどうかは業務要件次第なので、コメントの箇所で調整してください。
 
-各参照箇所について「その行がどのモード分岐の中にあるか」を自動判定します。例えば：
+**`AfterEdit` イベント** で入力値を`yyyy/MM/dd`形式に正規化しています。ユーザーが`20260417`と入力しても、確定後は`2026/04/17`として保存されるので、表示が統一されます。これが不要なら`AfterEdit`のハンドラごと外してください。
 
-```
-Select Case g_FuncMode
-    Case 1          ← モードコンテキスト = "1"
-        lblTitle.Text = "入庫検品"    ← この行は「Case 1」の中
-    Case 2          ← モードコンテキスト = "2"  
-        lblTitle.Text = "出庫ピッキング"
-End Select
-```
-
-これにより「`lblTitle` を変更したいが、Case 1 だけでなく Case 2 でも参照されている」ことが③のマトリクスで一目で分かります。
+**許容フォーマットの追加** は`_dateFormats`配列に追記するだけです。和暦対応が必要なら`"ggyy/MM/dd"`を追加し、`CultureInfo.InvariantCulture`を`New CultureInfo("ja-JP")`に変更してください。
