@@ -1,0 +1,316 @@
+<!DOCTYPE html>
+<html lang="ja">
+<head>
+<meta charset="UTF-8">
+<title>品番展開画面 UIモック</title>
+<style>
+  body { margin: 0; padding: 20px; background: #E5E5EA; font-family: "Meiryo UI", sans-serif; font-size: 12px; color: #000; }
+
+  .wf-body { max-width: 1280px; margin: 0 auto 20px; background: #F0F0F0; padding: 6px; border: 1px solid #999; }
+  .wf-titlebar { background: #4A90D9; color: #FFF; padding: 4px 10px; margin: -6px -6px 6px; display: flex; justify-content: space-between; }
+
+  .wf-group { border: 1px solid #A0A0A0; padding: 14px 10px 10px; margin-bottom: 8px; position: relative; background: #F8F8F8; }
+  .wf-group-title { position: absolute; top: -8px; left: 8px; background: #F8F8F8; padding: 0 4px; font-weight: 500; }
+
+  .wf-input { font-family: "Meiryo UI", sans-serif; font-size: 12px; padding: 1px 4px; border: 1px solid #7A7A7A; background: #FFF; height: 20px; box-sizing: border-box; border-radius: 0; }
+  .wf-input:focus { outline: 1px solid #4A90D9; outline-offset: -1px; }
+  .wf-input.mono { font-family: "Consolas", "MS Gothic", monospace; }
+  .wf-input.error { border: 1px solid #C42B1C; background: #FFF0F0; }
+
+  .wf-btn { font-family: "Meiryo UI", sans-serif; font-size: 12px; padding: 3px 14px; background: linear-gradient(to bottom, #F8F8F8, #E0E0E0); border: 1px solid #7A7A7A; color: #000; border-radius: 0; height: 24px; cursor: pointer; }
+  .wf-btn:hover { background: linear-gradient(to bottom, #FFF, #E8E8E8); border-color: #4A90D9; }
+  .wf-btn:disabled { color: #909090; background: #E8E8E8; cursor: not-allowed; border-color: #B0B0B0; }
+  .wf-btn.primary-big { font-weight: 500; padding: 4px 20px; height: 28px; }
+
+  .wf-grid { border: 1px solid #A0A0A0; background: #FFF; width: 100%; border-collapse: collapse; table-layout: fixed; font-size: 11px; }
+  .wf-grid th { background: #E8E8E8; border: 1px solid #C0C0C0; padding: 3px 5px; text-align: left; font-weight: normal; }
+  .wf-grid td { border: 1px solid #D4D4D4; padding: 0; vertical-align: middle; }
+  .wf-grid td .wf-cell-input { width: 100%; border: none; padding: 2px 5px; font-family: "Consolas", "MS Gothic", monospace; font-size: 11px; background: transparent; height: 20px; box-sizing: border-box; border-radius: 0; }
+  .wf-grid td .wf-cell-input.sans { font-family: "Meiryo UI", sans-serif; }
+  .wf-grid td .wf-cell-input:focus { background: #FFFBCC; outline: 1px solid #4A90D9; outline-offset: -1px; }
+  .wf-grid td.readonly-cell { background: #F0F0F0; padding: 3px 5px; font-family: "Consolas", "MS Gothic", monospace; color: #303030; }
+  .wf-grid td.readonly-cell.sans { font-family: "Meiryo UI", sans-serif; }
+  .wf-grid tr.new-row td { background: #FFFFE8; }
+  .wf-grid tr.new-row td.readonly-cell { background: #F8F8DC; }
+  .wf-grid td.rowbtn { text-align: center; padding: 1px; background: #F0F0F0; }
+  .wf-grid td.rowbtn button { width: 18px; height: 18px; padding: 0; font-size: 11px; border: 1px solid #7A7A7A; background: linear-gradient(to bottom, #F8F8F8, #E0E0E0); cursor: pointer; border-radius: 0; }
+
+  .wf-preview-box { background: #FFF; border: 1px solid #C0C0C0; padding: 5px 7px; font-family: "Consolas", "MS Gothic", monospace; font-size: 11px; line-height: 1.7; }
+  .wf-errorbox { background: #FFF0F0; border: 1px solid #C42B1C; padding: 5px 7px; font-size: 11px; color: #8B1A10; line-height: 1.7; }
+  .wf-errorbox .err-head { font-weight: 500; margin-bottom: 3px; display: flex; align-items: center; gap: 5px; }
+  .wf-errorbox .err-head::before { content: "!"; display: inline-block; width: 14px; height: 14px; background: #C42B1C; color: #FFF; text-align: center; font-weight: 500; line-height: 14px; font-size: 10px; }
+
+  .wf-status { background: #E0E0E0; border-top: 1px solid #A0A0A0; padding: 3px 8px; font-size: 11px; margin: 6px -6px -6px; display: flex; justify-content: space-between; }
+  .scroll-y { overflow-y: auto; border: 1px solid #A0A0A0; background: #FFF; }
+
+  .wf-tabs { display: flex; border-bottom: 1px solid #A0A0A0; background: #F0F0F0; padding-left: 2px; }
+  .wf-tab { padding: 5px 16px; border: 1px solid #A0A0A0; border-bottom: none; background: #E0E0E0; font-size: 12px; cursor: pointer; margin-right: -1px; margin-bottom: -1px; user-select: none; }
+  .wf-tab.active { background: #F8F8F8; padding-top: 6px; padding-bottom: 5px; border-top: 2px solid #4A90D9; position: relative; z-index: 2; font-weight: 500; }
+  .wf-tab-badge { display: inline-block; background: #4A90D9; color: #FFF; font-size: 10px; padding: 1px 6px; border-radius: 8px; margin-left: 6px; font-weight: normal; }
+  .wf-tab-content { background: #F8F8F8; border: 1px solid #A0A0A0; border-top: none; padding: 10px; }
+
+  .heading { font-size: 14px; font-weight: 500; margin: 24px auto 8px; padding: 5px 12px; background: #1D1D1F; color: #FFF; max-width: 1280px; text-align: center; }
+  .heading:first-child { margin-top: 0; }
+</style>
+</head>
+<body>
+
+<div class="heading">設定タブ（アクティブ時）</div>
+
+<div class="wf-body">
+  <div class="wf-titlebar">
+    <span>品番展開 — CB-00128 ｜ REQ-2026-0412 ｜ 図面変更 ｜ Rev A→B</span>
+    <span style="font-family: Consolas, monospace;">_ □ ×</span>
+  </div>
+
+  <div class="wf-tabs">
+    <div class="wf-tab active">設定</div>
+    <div class="wf-tab">プレビュー・既存<span class="wf-tab-badge">新規 7 ／ 既存 3</span></div>
+  </div>
+
+  <div class="wf-tab-content">
+
+    <div class="wf-group">
+      <span class="wf-group-title">1. 品番位置の指定（* で品番部分を置換）</span>
+      <table style="width: 100%; font-size: 12px;">
+        <colgroup><col style="width: 100px;"><col style="width: 200px;"><col></colgroup>
+        <tr style="color: #606060; font-size: 11px;">
+          <td></td><td>元の値</td><td>品番位置（* で指定）</td>
+        </tr>
+        <tr>
+          <td style="padding: 3px 0;">品目コード：</td>
+          <td style="font-family: Consolas, monospace; color: #303030;">1000890100001</td>
+          <td><input type="text" class="wf-input mono" value="100089*0001" style="width: 100%;" /></td>
+        </tr>
+        <tr>
+          <td style="padding: 3px 0;">図面番号：</td>
+          <td style="font-family: Consolas, monospace; color: #303030;">100089-010-00-01</td>
+          <td><input type="text" class="wf-input mono" value="100089-*-00-01" style="width: 100%;" /></td>
+        </tr>
+        <tr>
+          <td style="padding: 3px 0;">品名：</td>
+          <td style="color: #303030;">ケース 品番010</td>
+          <td><input type="text" class="wf-input" value="ケース 品番*" style="width: 100%;" /></td>
+        </tr>
+      </table>
+    </div>
+
+    <div class="wf-group">
+      <span class="wf-group-title">2. 品番の一括生成</span>
+
+      <table style="font-size: 12px; margin-bottom: 8px;">
+        <tr>
+          <td style="padding-right: 6px;">開始品番：</td>
+          <td style="padding-right: 14px;"><input type="text" class="wf-input mono" value="040" style="width: 80px;" /></td>
+          <td style="padding-right: 6px;">終了品番：</td>
+          <td style="padding-right: 14px;"><input type="text" class="wf-input mono" value="100" style="width: 80px;" /></td>
+          <td style="padding-right: 6px;">ステップ：</td>
+          <td><input type="text" class="wf-input mono" value="10" style="width: 60px;" /></td>
+        </tr>
+      </table>
+
+      <div style="font-size: 11px; color: #303030; margin-bottom: 3px;">生成される品番（7件）：</div>
+      <div class="wf-preview-box" style="margin-bottom: 8px;">040, 050, 060, 070, 080, 090, 100</div>
+
+      <div style="font-size: 11px; color: #303030; margin-bottom: 3px;">展開結果プレビュー：</div>
+      <div class="wf-preview-box" style="margin-bottom: 10px;">
+        [040] 1000890400001 ／ 100089-040-00-01 ／ ケース 品番040<br>
+        [050] 1000890500001 ／ 100089-050-00-01 ／ ケース 品番050<br>
+        <span style="color: #909090;">… 060, 070, 080, 090 省略 …</span><br>
+        [100] 1000891000001 ／ 100089-100-00-01 ／ ケース 品番100
+      </div>
+
+      <div style="display: flex; justify-content: space-between; align-items: center; padding-top: 6px; border-top: 1px dashed #C0C0C0;">
+        <div style="font-size: 11px; color: #606060;">
+          ※ プレビューへの反映は下のボタンを押したときのみ行われます
+        </div>
+        <input type="button" class="wf-btn primary-big" value="プレビューに追加(A)" />
+      </div>
+    </div>
+
+    <div class="wf-group">
+      <span class="wf-group-title">2. 品番の一括生成（エラーパターン例）</span>
+
+      <div style="font-family: Consolas, monospace; font-size: 11px; color: #606060; margin-bottom: 4px; padding-left: 4px; border-left: 3px solid #4A90D9;">
+        ▼ パターン：* が2個 ＋ 開始＞終了
+      </div>
+      <table style="margin-bottom: 6px;">
+        <tr>
+          <td style="padding-right: 6px;">開始品番：</td>
+          <td style="padding-right: 14px;"><input type="text" class="wf-input mono error" value="100" style="width: 80px;" /></td>
+          <td style="padding-right: 6px;">終了品番：</td>
+          <td style="padding-right: 14px;"><input type="text" class="wf-input mono error" value="040" style="width: 80px;" /></td>
+          <td style="padding-right: 6px;">ステップ：</td>
+          <td style="padding-right: 14px;"><input type="text" class="wf-input mono" value="10" style="width: 60px;" /></td>
+        </tr>
+      </table>
+      <div class="wf-errorbox" style="margin-bottom: 14px;">
+        <div class="err-head">入力エラー（2件）</div>
+        ・品目コードの品番位置：<span style="font-family: Consolas, monospace;">100089**0001</span>　→　* は1つだけ指定してください<br>
+        ・開始品番(<span style="font-family: Consolas, monospace;">100</span>) が 終了品番(<span style="font-family: Consolas, monospace;">040</span>) より大きくなっています
+      </div>
+
+      <div style="font-family: Consolas, monospace; font-size: 11px; color: #606060; margin-bottom: 4px; padding-left: 4px; border-left: 3px solid #4A90D9;">
+        ▼ パターン：桁数不一致
+      </div>
+      <table style="margin-bottom: 6px;">
+        <tr>
+          <td style="padding-right: 6px;">開始品番：</td>
+          <td style="padding-right: 14px;"><input type="text" class="wf-input mono error" value="10" style="width: 80px;" /></td>
+          <td style="padding-right: 6px;">終了品番：</td>
+          <td style="padding-right: 14px;"><input type="text" class="wf-input mono error" value="100" style="width: 80px;" /></td>
+          <td style="padding-right: 6px;">ステップ：</td>
+          <td style="padding-right: 14px;"><input type="text" class="wf-input mono" value="10" style="width: 60px;" /></td>
+        </tr>
+      </table>
+      <div class="wf-errorbox">
+        <div class="err-head">入力エラー（1件）</div>
+        ・開始品番(<span style="font-family: Consolas, monospace;">10</span> / 2桁) と 終了品番(<span style="font-family: Consolas, monospace;">100</span> / 3桁) の桁数が一致していません<br>
+        <span style="padding-left: 13px;">桁数を揃えてください（例：<span style="font-family: Consolas, monospace;">010</span> 〜 <span style="font-family: Consolas, monospace;">100</span>）</span>
+      </div>
+    </div>
+
+  </div>
+
+  <div class="wf-status">
+    <span>現在プレビューに 7件 登録中 ／ 設定タブでは保存できません</span>
+    <span style="color: #606060;">Ready</span>
+  </div>
+</div>
+
+<div class="heading">プレビュー・既存タブ（アクティブ時）</div>
+
+<div class="wf-body">
+  <div class="wf-titlebar">
+    <span>品番展開 — CB-00128 ｜ REQ-2026-0412 ｜ 図面変更 ｜ Rev A→B</span>
+    <span style="font-family: Consolas, monospace;">_ □ ×</span>
+  </div>
+
+  <div class="wf-tabs">
+    <div class="wf-tab">設定</div>
+    <div class="wf-tab active">プレビュー・既存<span class="wf-tab-badge">新規 7 ／ 既存 3</span></div>
+  </div>
+
+  <div class="wf-tab-content">
+
+    <div class="wf-group" style="background: #F8F8F8;">
+      <span class="wf-group-title" style="background: #F8F8F8;">既存の展開データ（参照のみ、3件）</span>
+      <div class="scroll-y" style="max-height: 110px;">
+        <table class="wf-grid" style="border: none;">
+          <colgroup><col style="width: 50px;"><col style="width: 70px;"><col><col><col></colgroup>
+          <thead><tr><th>No.</th><th>品番</th><th>品目コード</th><th>図面番号</th><th>品名</th></tr></thead>
+          <tbody>
+            <tr>
+              <td class="readonly-cell" style="text-align: right;">1</td>
+              <td class="readonly-cell">010</td>
+              <td class="readonly-cell">1000890100001</td>
+              <td class="readonly-cell">100089-010-00-01</td>
+              <td class="readonly-cell sans">ケース 品番010</td>
+            </tr>
+            <tr>
+              <td class="readonly-cell" style="text-align: right;">2</td>
+              <td class="readonly-cell">020</td>
+              <td class="readonly-cell">1000890200001</td>
+              <td class="readonly-cell">100089-020-00-01</td>
+              <td class="readonly-cell sans">ケース 品番020</td>
+            </tr>
+            <tr>
+              <td class="readonly-cell" style="text-align: right;">3</td>
+              <td class="readonly-cell">030</td>
+              <td class="readonly-cell">1000890300001</td>
+              <td class="readonly-cell">100089-030-00-01</td>
+              <td class="readonly-cell sans">ケース 品番030</td>
+            </tr>
+          </tbody>
+        </table>
+      </div>
+      <div style="font-size: 10px; color: #606060; margin-top: 3px;">※ 既存と重複する品番は保存時にスキップされます</div>
+    </div>
+
+    <div class="wf-group">
+      <span class="wf-group-title">展開プレビュー（新規 7件、編集可）</span>
+      <div style="margin-bottom: 4px; display: flex; justify-content: space-between; align-items: center;">
+        <div style="font-size: 11px; color: #606060;">各セルを直接編集できます。行単位で削除可能。</div>
+        <input type="button" class="wf-btn" value="＋ 行追加" style="font-size: 11px; padding: 2px 10px; height: 22px;" />
+      </div>
+      <div class="scroll-y" style="max-height: 260px;">
+        <table class="wf-grid" style="border: none;">
+          <colgroup><col style="width: 40px;"><col style="width: 80px;"><col><col><col><col style="width: 30px;"></colgroup>
+          <thead><tr><th>No.</th><th>品番</th><th>品目コード</th><th>図面番号</th><th>品名</th><th></th></tr></thead>
+          <tbody>
+            <tr class="new-row">
+              <td class="readonly-cell" style="text-align: right;">1</td>
+              <td><input type="text" class="wf-cell-input" value="040" /></td>
+              <td><input type="text" class="wf-cell-input" value="1000890400001" /></td>
+              <td><input type="text" class="wf-cell-input" value="100089-040-00-01" /></td>
+              <td><input type="text" class="wf-cell-input sans" value="ケース 品番040" /></td>
+              <td class="rowbtn"><button title="削除">×</button></td>
+            </tr>
+            <tr class="new-row">
+              <td class="readonly-cell" style="text-align: right;">2</td>
+              <td><input type="text" class="wf-cell-input" value="050" /></td>
+              <td><input type="text" class="wf-cell-input" value="1000890500001" /></td>
+              <td><input type="text" class="wf-cell-input" value="100089-050-00-01" /></td>
+              <td><input type="text" class="wf-cell-input sans" value="ケース 品番050" /></td>
+              <td class="rowbtn"><button title="削除">×</button></td>
+            </tr>
+            <tr class="new-row">
+              <td class="readonly-cell" style="text-align: right;">3</td>
+              <td><input type="text" class="wf-cell-input" value="060" /></td>
+              <td><input type="text" class="wf-cell-input" value="1000890600001" /></td>
+              <td><input type="text" class="wf-cell-input" value="100089-060-00-01" /></td>
+              <td><input type="text" class="wf-cell-input sans" value="ケース 品番060" /></td>
+              <td class="rowbtn"><button title="削除">×</button></td>
+            </tr>
+            <tr class="new-row">
+              <td class="readonly-cell" style="text-align: right;">4</td>
+              <td><input type="text" class="wf-cell-input" value="070" /></td>
+              <td><input type="text" class="wf-cell-input" value="1000890700001" /></td>
+              <td><input type="text" class="wf-cell-input" value="100089-070-00-01" /></td>
+              <td><input type="text" class="wf-cell-input sans" value="ケース 品番070" /></td>
+              <td class="rowbtn"><button title="削除">×</button></td>
+            </tr>
+            <tr class="new-row">
+              <td class="readonly-cell" style="text-align: right;">5</td>
+              <td><input type="text" class="wf-cell-input" value="080" /></td>
+              <td><input type="text" class="wf-cell-input" value="1000890800001" /></td>
+              <td><input type="text" class="wf-cell-input" value="100089-080-00-01" /></td>
+              <td><input type="text" class="wf-cell-input sans" value="ケース 品番080" /></td>
+              <td class="rowbtn"><button title="削除">×</button></td>
+            </tr>
+            <tr class="new-row">
+              <td class="readonly-cell" style="text-align: right;">6</td>
+              <td><input type="text" class="wf-cell-input" value="090" /></td>
+              <td><input type="text" class="wf-cell-input" value="1000890900001" /></td>
+              <td><input type="text" class="wf-cell-input" value="100089-090-00-01" /></td>
+              <td><input type="text" class="wf-cell-input sans" value="ケース 品番090" /></td>
+              <td class="rowbtn"><button title="削除">×</button></td>
+            </tr>
+            <tr class="new-row">
+              <td class="readonly-cell" style="text-align: right;">7</td>
+              <td><input type="text" class="wf-cell-input" value="100" /></td>
+              <td><input type="text" class="wf-cell-input" value="1000891000001" /></td>
+              <td><input type="text" class="wf-cell-input" value="100089-100-00-01" /></td>
+              <td><input type="text" class="wf-cell-input sans" value="ケース 品番100" /></td>
+              <td class="rowbtn"><button title="削除">×</button></td>
+            </tr>
+          </tbody>
+        </table>
+      </div>
+    </div>
+
+    <div style="display: flex; justify-content: flex-end; gap: 6px; margin-top: 8px;">
+      <input type="button" class="wf-btn primary-big" value="保存(S)" style="min-width: 90px;" />
+      <input type="button" class="wf-btn" value="キャンセル(C)" style="min-width: 90px; height: 28px;" />
+    </div>
+
+  </div>
+
+  <div class="wf-status">
+    <span>保存時：新規 7件を T_CHANGE_EXPANDED_ITEM へ追加</span>
+    <span style="color: #606060;">Ready</span>
+  </div>
+</div>
+
+</body>
+</html>

@@ -1,0 +1,231 @@
+<!DOCTYPE html>
+<html lang="ja">
+<head>
+<meta charset="UTF-8">
+<title>品番×工場 紐付け画面 UIモック</title>
+<style>
+  body { margin: 0; padding: 20px; background: #E5E5EA; font-family: "Meiryo UI", sans-serif; font-size: 12px; color: #000; }
+  .wf-root { max-width: 1280px; margin: 0 auto; background: #F0F0F0; padding: 6px; border: 1px solid #999; }
+  .wf-titlebar { background: #4A90D9; color: #FFF; padding: 4px 10px; margin: -6px -6px 6px; display: flex; justify-content: space-between; }
+  .wf-group { border: 1px solid #A0A0A0; padding: 14px 10px 10px; margin-bottom: 6px; position: relative; background: #F0F0F0; }
+  .wf-group-title { position: absolute; top: -8px; left: 8px; background: #F0F0F0; padding: 0 4px; font-weight: 500; }
+  .wf-btn { font-family: "Meiryo UI", sans-serif; font-size: 12px; padding: 2px 10px; background: linear-gradient(to bottom, #F8F8F8, #E0E0E0); border: 1px solid #7A7A7A; color: #000; border-radius: 0; height: 22px; cursor: pointer; }
+  .wf-btn:hover { background: linear-gradient(to bottom, #FFF, #E8E8E8); }
+  .wf-btn.big { height: 30px; padding: 4px 24px; font-weight: 500; }
+  .wf-grid { border: 1px solid #A0A0A0; background: #FFF; width: 100%; border-collapse: collapse; table-layout: fixed; font-size: 11px; }
+  .wf-grid th { background: #E8E8E8; border: 1px solid #C0C0C0; padding: 3px 5px; text-align: left; font-weight: normal; }
+  .wf-grid td { border: 1px solid #D4D4D4; padding: 3px 5px; vertical-align: middle; }
+  .wf-grid td.mono { font-family: "Consolas", "MS Gothic", monospace; color: #303030; }
+  .wf-grid td.center { text-align: center; padding: 0; }
+  .wf-grid tr.checked td { background: #E6F1FB; }
+  .wf-check { width: 14px; height: 14px; cursor: pointer; margin: 0; }
+  .wf-status { background: #E0E0E0; border-top: 1px solid #A0A0A0; padding: 3px 8px; font-size: 11px; margin: 6px -6px -6px; display: flex; justify-content: space-between; }
+  .scroll-y { overflow-y: auto; border: 1px solid #A0A0A0; background: #FFF; }
+  .two-col { display: grid; grid-template-columns: 1.4fr 1fr; gap: 6px; }
+  .toolbar { display: flex; gap: 4px; margin-bottom: 4px; align-items: center; }
+  .hint { font-size: 11px; color: #606060; margin-top: 3px; }
+</style>
+</head>
+<body>
+
+<div class="wf-root">
+
+<div class="wf-titlebar">
+  <span>品番×工場 紐付け ― CB-00128 ｜ REQ-2026-0412 ｜ Rev A→B</span>
+  <span style="font-family: Consolas, monospace;">_ □ ×</span>
+</div>
+
+<div class="two-col">
+
+  <div>
+
+    <div class="wf-group">
+      <span class="wf-group-title">① 品番を選択</span>
+      <div class="toolbar">
+        <input type="button" class="wf-btn" value="全選択" />
+        <input type="button" class="wf-btn" value="全解除" />
+        <input type="button" class="wf-btn" value="未紐付けのみ" />
+        <div style="flex: 1;"></div>
+        <span style="font-size: 11px; color: #606060;">7 / 10 件 選択中</span>
+      </div>
+      <div class="scroll-y" style="max-height: 220px;">
+        <table class="wf-grid" style="border: none;">
+          <colgroup><col style="width: 28px;"><col style="width: 60px;"><col><col><col style="width: 120px;"></colgroup>
+          <thead><tr><th class="center"><input type="checkbox" class="wf-check" /></th><th>品番</th><th>品目コード</th><th>品名</th><th>紐付け済</th></tr></thead>
+          <tbody>
+            <tr>
+              <td class="center"><input type="checkbox" class="wf-check" /></td>
+              <td class="mono">010</td>
+              <td class="mono">1000890100001</td>
+              <td>ケース 品番010</td>
+              <td style="font-size: 10px; color: #606060;">静岡, 愛知</td>
+            </tr>
+            <tr>
+              <td class="center"><input type="checkbox" class="wf-check" /></td>
+              <td class="mono">020</td>
+              <td class="mono">1000890200001</td>
+              <td>ケース 品番020</td>
+              <td style="font-size: 10px; color: #606060;">静岡</td>
+            </tr>
+            <tr>
+              <td class="center"><input type="checkbox" class="wf-check" /></td>
+              <td class="mono">030</td>
+              <td class="mono">1000890300001</td>
+              <td>ケース 品番030</td>
+              <td style="font-size: 10px; color: #606060;">静岡, 愛知</td>
+            </tr>
+            <tr class="checked">
+              <td class="center"><input type="checkbox" class="wf-check" checked /></td>
+              <td class="mono">040</td>
+              <td class="mono">1000890400001</td>
+              <td>ケース 品番040</td>
+              <td style="font-size: 10px; color: #C42B1C;">（未）</td>
+            </tr>
+            <tr class="checked">
+              <td class="center"><input type="checkbox" class="wf-check" checked /></td>
+              <td class="mono">050</td>
+              <td class="mono">1000890500001</td>
+              <td>ケース 品番050</td>
+              <td style="font-size: 10px; color: #C42B1C;">（未）</td>
+            </tr>
+            <tr class="checked">
+              <td class="center"><input type="checkbox" class="wf-check" checked /></td>
+              <td class="mono">060</td>
+              <td class="mono">1000890600001</td>
+              <td>ケース 品番060</td>
+              <td style="font-size: 10px; color: #C42B1C;">（未）</td>
+            </tr>
+            <tr class="checked">
+              <td class="center"><input type="checkbox" class="wf-check" checked /></td>
+              <td class="mono">070</td>
+              <td class="mono">1000890700001</td>
+              <td>ケース 品番070</td>
+              <td style="font-size: 10px; color: #C42B1C;">（未）</td>
+            </tr>
+            <tr class="checked">
+              <td class="center"><input type="checkbox" class="wf-check" checked /></td>
+              <td class="mono">080</td>
+              <td class="mono">1000890800001</td>
+              <td>ケース 品番080</td>
+              <td style="font-size: 10px; color: #C42B1C;">（未）</td>
+            </tr>
+            <tr class="checked">
+              <td class="center"><input type="checkbox" class="wf-check" checked /></td>
+              <td class="mono">090</td>
+              <td class="mono">1000890900001</td>
+              <td>ケース 品番090</td>
+              <td style="font-size: 10px; color: #C42B1C;">（未）</td>
+            </tr>
+            <tr class="checked">
+              <td class="center"><input type="checkbox" class="wf-check" checked /></td>
+              <td class="mono">100</td>
+              <td class="mono">1000891000001</td>
+              <td>ケース 品番100</td>
+              <td style="font-size: 10px; color: #C42B1C;">（未）</td>
+            </tr>
+          </tbody>
+        </table>
+      </div>
+    </div>
+
+    <div class="wf-group">
+      <span class="wf-group-title">② 工場を選択（複数可）</span>
+      <div class="toolbar">
+        <input type="button" class="wf-btn" value="全選択" />
+        <input type="button" class="wf-btn" value="全解除" />
+        <div style="flex: 1;"></div>
+        <span style="font-size: 11px; color: #606060;">2 / 5 件 選択中</span>
+      </div>
+      <div class="scroll-y" style="max-height: 140px;">
+        <table class="wf-grid" style="border: none;">
+          <colgroup><col style="width: 28px;"><col style="width: 80px;"><col><col style="width: 70px;"></colgroup>
+          <thead><tr><th class="center"><input type="checkbox" class="wf-check" /></th><th>工場コード</th><th>工場名</th><th>地域</th></tr></thead>
+          <tbody>
+            <tr class="checked">
+              <td class="center"><input type="checkbox" class="wf-check" checked /></td>
+              <td class="mono">PLT001</td>
+              <td>静岡工場</td>
+              <td>国内</td>
+            </tr>
+            <tr class="checked">
+              <td class="center"><input type="checkbox" class="wf-check" checked /></td>
+              <td class="mono">PLT002</td>
+              <td>愛知工場</td>
+              <td>国内</td>
+            </tr>
+            <tr>
+              <td class="center"><input type="checkbox" class="wf-check" /></td>
+              <td class="mono">PLT003</td>
+              <td>広島工場</td>
+              <td>国内</td>
+            </tr>
+            <tr>
+              <td class="center"><input type="checkbox" class="wf-check" /></td>
+              <td class="mono">PLT101</td>
+              <td>タイ工場</td>
+              <td>海外</td>
+            </tr>
+            <tr>
+              <td class="center"><input type="checkbox" class="wf-check" /></td>
+              <td class="mono">PLT102</td>
+              <td>メキシコ工場</td>
+              <td>海外</td>
+            </tr>
+          </tbody>
+        </table>
+      </div>
+    </div>
+
+  </div>
+
+  <div>
+    <div class="wf-group" style="padding-top: 14px;">
+      <span class="wf-group-title">紐付けプレビュー</span>
+      <div style="font-size: 11px; color: #303030; margin-bottom: 4px;">
+        選択中　品番 <b>7件</b> × 工場 <b>2件</b>　＝　<b>14件</b> 追加
+      </div>
+      <div class="scroll-y" style="max-height: 360px;">
+        <table class="wf-grid" style="border: none;">
+          <colgroup><col style="width: 55px;"><col style="width: 80px;"><col></colgroup>
+          <thead><tr><th>品番</th><th>工場</th><th>備考</th></tr></thead>
+          <tbody>
+            <tr><td class="mono">040</td><td>静岡工場</td><td style="font-size: 10px; color: #0C447C;">新規</td></tr>
+            <tr><td class="mono">040</td><td>愛知工場</td><td style="font-size: 10px; color: #0C447C;">新規</td></tr>
+            <tr><td class="mono">050</td><td>静岡工場</td><td style="font-size: 10px; color: #0C447C;">新規</td></tr>
+            <tr><td class="mono">050</td><td>愛知工場</td><td style="font-size: 10px; color: #0C447C;">新規</td></tr>
+            <tr><td class="mono">060</td><td>静岡工場</td><td style="font-size: 10px; color: #0C447C;">新規</td></tr>
+            <tr><td class="mono">060</td><td>愛知工場</td><td style="font-size: 10px; color: #0C447C;">新規</td></tr>
+            <tr><td class="mono">070</td><td>静岡工場</td><td style="font-size: 10px; color: #0C447C;">新規</td></tr>
+            <tr><td class="mono">070</td><td>愛知工場</td><td style="font-size: 10px; color: #0C447C;">新規</td></tr>
+            <tr><td class="mono">080</td><td>静岡工場</td><td style="font-size: 10px; color: #0C447C;">新規</td></tr>
+            <tr><td class="mono">080</td><td>愛知工場</td><td style="font-size: 10px; color: #0C447C;">新規</td></tr>
+            <tr><td class="mono">090</td><td>静岡工場</td><td style="font-size: 10px; color: #0C447C;">新規</td></tr>
+            <tr><td class="mono">090</td><td>愛知工場</td><td style="font-size: 10px; color: #0C447C;">新規</td></tr>
+            <tr><td class="mono">100</td><td>静岡工場</td><td style="font-size: 10px; color: #0C447C;">新規</td></tr>
+            <tr><td class="mono">100</td><td>愛知工場</td><td style="font-size: 10px; color: #0C447C;">新規</td></tr>
+          </tbody>
+        </table>
+      </div>
+      <div class="hint">※ 既に紐付け済みの組み合わせは保存時にスキップされます</div>
+    </div>
+  </div>
+
+</div>
+
+<div style="display: flex; justify-content: space-between; align-items: center; margin-top: 6px;">
+  <div style="font-size: 11px; color: #606060;">保存時：T_CHANGE_EXECUTION に 14件追加（既存重複はスキップ）</div>
+  <div>
+    <input type="button" class="wf-btn big" value="紐付けを保存(S)" style="min-width: 140px;" />
+    <input type="button" class="wf-btn" value="キャンセル(C)" style="min-width: 80px; height: 30px;" />
+  </div>
+</div>
+
+<div class="wf-status">
+  <span>品番 7件 × 工場 2件 = 14件 紐付け予定</span>
+  <span style="color: #606060;">Ready</span>
+</div>
+
+</div>
+
+</body>
+</html>
