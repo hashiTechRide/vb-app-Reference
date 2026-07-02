@@ -152,3 +152,142 @@ End Sub
 - `Release` は**自分が所有者の行だけ**を消すようにし、読み取り専用後に閉じても他者のロックを壊さない。
 
 方向Aは「保存のたびに切れて取り直す」前提なので、再ロックの成否チェックが常に要ります。今回の読み取り専用化はその失敗系の受け皿として過不足なく、既存のロック状態購読にそのまま乗るので、追加実装は `ReacquireLock` と `LockLost` の通知、メッセージ表示くらいで収まります。
+
+いい問いです。前の回答で私が「ViewModelに `_lockService` を注入してあれば」と書いたのに、Formにしか持たせていない現状と食い違っていました。まず「誰が再取得を実行すべきか」を決めれば、「誰に渡すべきか」は自動で決まります。順番が逆になっていたのが分かりにくさの原因です。
+
+## まず決めるべきこと：再取得は誰の責任か
+
+ロック再取得が必要になるのは**保存の直後**です。だから「保存を実行するのは誰か」に紐づけて考えます。これまでの設計では、保存は次の流れでした。
+
+```
+保存ボタン(View) → UserControl(橋渡し) → ViewModel.OnSave → Repository.Save
+```
+
+保存を主導しているのは **ViewModel** です。再取得は保存の成否に直結する処理（Commit/Rollbackで切れた排他を取り直す）なので、**保存を主導するViewModelと同じ場所で完結させる**のが自然です。保存はViewModelなのに再取得だけFormに戻す、とすると制御が行ったり来たりして追いにくくなります。
+
+つまり答えは、**ロックサービス（相当の操作窓口）はViewModelに渡す**。UserControlには渡さない（UserControlは橋渡しで、業務判断を持たない方針のため）。
+
+## ただしForm所有のままでよい部分もある
+
+ロックには2つの操作タイミングがあります。
+
+- **開くときの取得・閉じるときの解放** … 画面ライフサイクルの話。**Formの責任**。
+- **保存直後の再取得** … 保存の一部。**ViewModelの責任**。
+
+前者はFormが握って正しい。後者だけViewModelに窓口を渡す。**「Formが所有」と「ViewModelにも操作させる」は両立します。**同じサービスインスタンスをFormが生成・保持しつつ、ViewModelにも参照を渡せばよい。所有権と使用権は別です。
+
+```
+RecordLockService（1インスタンス）
+   ├─ Form が保持     … 開くとき Acquire / 閉じるとき Release
+   └─ ViewModel に注入 … 保存直後の再取得（TryAcquire）
+```
+
+## 渡し方：サービスそのものか、窓口を絞るか
+
+ここで選択肢が2つあります。
+
+### 案1：RecordLockServiceをそのままViewModelに注入
+
+シンプル。Composition Root（Form生成時）で渡します。
+
+```vb
+' Form のコンストラクタ（Composition Root）
+_lockService = New RecordLockService(_db, CurrentUser.Name)
+
+Dim largeVm As New LargeEditorViewModel(largeRepo, _lockService, _lockState, _modeState, _baseSeq)
+```
+
+```vb
+' ViewModel は保存直後に自分で再取得
+Public Sub OnSave()
+    Dim ok As Boolean
+    Try
+        _repository.Save(_table)
+        ok = True
+    Catch ex As Exception
+        ok = False
+        RaiseEvent SaveFailed(Me, New SaveFailedEventArgs(ex))
+    End Try
+
+    ' Commit/Rollbackどちらでも排他は切れているので取り直す
+    Dim result = _lockService.TryAcquire(_baseSeq)
+    _lockState.Apply(result)
+    If Not result.Acquired Then
+        RaiseEvent LockLost(Me, New LockLostEventArgs(result.LockedBy))
+        Return   ' 読み取り専用へ（前回の通り）
+    End If
+
+    If ok Then AfterAction()
+End Sub
+```
+
+### 案2：再取得だけの薄い窓口を渡す（推奨寄り）
+
+`RecordLockService` には取得・解放・確認が全部入っています。ViewModelに丸ごと渡すと、ViewModelが解放まで呼べてしまい、「解放はFormの責任」という線引きが緩みます。ViewModelに必要なのは**再取得だけ**なので、そこだけ切った窓口を渡すと責任がはっきりします。
+
+```vb
+' ViewModelが必要とするのは「今の対象を取り直す」ことだけ
+Public Interface ILockRenewer
+    Function Renew() As LockResult   ' 対象Seqは内部で保持
+End Interface
+```
+
+Formが実装（またはラップ）して、baseSeqを内部に閉じ込めた窓口を渡します。
+
+```vb
+' Form側で baseSeq を束ねた窓口を作ってViewModelへ
+Dim renewer As ILockRenewer = New LockRenewer(_lockService, _baseSeq)
+Dim largeVm As New LargeEditorViewModel(largeRepo, renewer, _lockState, _modeState)
+```
+
+```vb
+Public Class LockRenewer
+    Implements ILockRenewer
+    Private ReadOnly _service As RecordLockService
+    Private ReadOnly _baseSeq As Long
+    Public Sub New(service As RecordLockService, baseSeq As Long)
+        _service = service
+        _baseSeq = baseSeq
+    End Sub
+    Public Function Renew() As LockResult Implements ILockRenewer.Renew
+        Return _service.TryAcquire(_baseSeq)
+    End Function
+End Class
+```
+
+ViewModelは `_renewer.Renew()` を呼ぶだけ。baseSeqすら知らなくてよくなり、解放も呼べないので、責任が「再取得のみ」に絞られます。
+
+## どちらを選ぶか
+
+- **案1（サービス丸渡し）** … 実装が少ない。ViewModelがロック操作全般に触れるが、規約で「ViewModelは再取得しか呼ばない」と決めておけば実用上問題ない。小規模ならこれで十分。
+- **案2（窓口を絞る）** … ViewModelができることを再取得だけに限定でき、「解放はFormだけ」の線引きがコードで保証される。baseSeqの受け渡しもViewModelから隠せる。設計をきっちりさせたいならこちら。
+
+これまで「責任を語彙で縛る」話をしてきた流れなら案2が一貫しますが、案1でも動作は同じです。まず案1で組んで、ViewModelがロックを触りすぎて気になったら案2へ絞る、でも構いません。
+
+## UserControlには渡さない
+
+再取得はViewModelで完結するので、UserControlはロックサービスを持ちません。UserControlの役割は変わらず橋渡しです。保存ボタンのクリックをViewModelに渡し、ViewModelが上げる `LockLost` イベントを受けてメッセージ表示する、その2点だけ。
+
+```vb
+' UserControl：ロックサービスは持たない。イベントの受け渡しだけ
+Private Sub saveButton_Click(sender As Object, e As EventArgs) Handles saveButton.Click
+    grid.FinishEditing()
+    _viewModel.OnSave()
+End Sub
+
+AddHandler _viewModel.LockLost, AddressOf ShowLockLostMessage
+```
+
+## 前回の分かりにくさの正体
+
+前回は「ViewModelに注入してあれば」と条件形で書いたのに、実際の注入をどこでやるか（Composition Root＝Form生成時）を明示しなかったので、Formにしか無い現状とつながりませんでした。正しくは、**Formが生成・保持したまま、ViewModelにも参照（案1）か窓口（案2）を渡す**。所有はForm、再取得の実行はViewModel、という分担です。
+
+## まとめ
+
+- 再取得は**保存の直後に必要**で、保存を主導するのは**ViewModel**。だから再取得もViewModelで完結させるのが自然。制御をFormへ戻さない。
+- よって**ロック操作の窓口はViewModelに渡す**。UserControlには渡さない（橋渡しに徹する方針のため）。
+- ただし**開く時の取得・閉じる時の解放はFormの責任**のまま。「Formが所有」と「ViewModelにも操作させる」は両立する。所有権と使用権は別。
+- 渡し方は2案。**案1**：`RecordLockService` を丸ごと注入（simple）。**案2**：再取得だけの `ILockRenewer` に絞って注入（責任が明確・baseSeqも隠せる）。どちらでも動作は同じ。
+- Composition Root（Form生成時）で注入する。ここが前回明示できておらず、現状とのつながりが見えにくかった点。
+
+現状Formにしか無いのは出発点として正しいので、そこから「ViewModelに再取得の窓口を追加で渡す」だけで済みます。Formからロックを剥がす必要はありません。足すだけです。
