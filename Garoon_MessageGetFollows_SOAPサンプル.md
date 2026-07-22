@@ -165,3 +165,63 @@ End Module
 1. まずWSDL(`?MessageCgi;jp;WSDL`のようなURL)をブラウザで取得し、`MessageGetFollows`系メソッドの正確な入出力スキーマを確認する
 2. SoapUIなどのツールで一度動作するリクエストを作ってから、VB.NETコードのXML構造をそれに合わせる
 3. `wex.Response`からのエラーボディ取得部分でSOAP Faultの中身を必ず確認する(認証エラーかスキーマエラーか切り分けやすくなります)
+
+
+Web参照方式でのFault確認方法と、よくある原因を整理します。
+
+## 1. SOAP Faultの中身を見る方法
+
+Web参照(自動生成プロキシ)経由だと、エラーは`System.Web.Services.Protocols.SoapException`として飛んできます。これをキャッチして中身を出力してください。
+
+```vb.net
+Try
+    Dim client As New MessageBinding()
+    client.Credentials = New NetworkCredential(LoginName, Password)
+    client.PreAuthenticate = True
+
+    Dim request As New MessageGetFollowRequestType()
+    request.message_id = "12345"
+
+    Dim response = client.MessageGetFollow(request)
+
+Catch soapEx As System.Web.Services.Protocols.SoapException
+    ' ここが本命。Garoonが返してきた本当のエラー内容
+    Console.WriteLine("=== SOAP Fault ===")
+    Console.WriteLine("Code: " & soapEx.Code.ToString())
+    Console.WriteLine("Message: " & soapEx.Message)
+    Console.WriteLine("Detail: " & soapEx.Detail?.OuterXml)
+    Console.WriteLine("Actor: " & soapEx.Actor)
+
+Catch ex As Exception
+    Console.WriteLine("その他エラー: " & ex.Message)
+End Try
+```
+
+`soapEx.Detail.OuterXml`がGaroon側の詳しいエラーコード・メッセージを含んでいることが多いです。ここが一番重要な情報なので、まずこれを出力してみてください。
+
+## 2. 送信している実際のXMLも見る(推奨)
+
+Web参照経由だと何を送っているか見えづらいので、`SoapExtension`を使わずに簡易的に確認するなら、`Fiddler`や`Wireshark`などのHTTPキャプチャツールを使うか、以下のようにプロキシクラスに軽くトレースを仕込む方法があります。
+
+```vb.net
+' プロキシクラスの継承元は System.Web.Services.Protocols.SoapHttpClientProtocol
+' 簡易的に確認したいだけなら、まずはFault Detailの中身を見るのが手軽です
+```
+
+もし可能であれば、Fiddlerなどでリクエスト/レスポンスの生XMLをキャプチャするのが一番確実です(パッケージ版はローカルネットワーク内通信のことが多いのでFiddlerでも捕捉しやすいはずです)。
+
+## 3. 「他のメソッドは動くのにこれだけ失敗する」場合のよくある原因
+
+| 原因 | 具体例 |
+|---|---|
+| **必須プロパティの未設定** | `message_id`以外に`message_type`や`confirmation_type`など、GaroonのMessageGetFollows系は地味に必須パラメータが多いです |
+| **型の不一致** | `message_id`がプロキシ上は`String()`(配列)なのに`String`単体を代入している(またはその逆) |
+| **メソッド名違い** | `MessageGetFollow`ではなく実際は`MessageGetFollows`(複数形)や`MessageGetFollowConfirmation`など、似た名前の別メソッドを呼んでいる |
+| **SOAPヘッダー未設定** | `Action`ヘッダーや`Locale`/`Timezone`ヘッダーをプロキシが自動生成していない/正しく設定されていない |
+
+`MessageGetFollowRequestType`のプロパティを一通り確認したいので、Visual Studioで以下を教えてもらえますか。
+
+- `MessageGetFollowRequestType`にインテリセンスで出てくる**プロパティ一覧**(`message_id`以外に何があるか)
+- `soapEx.Detail.OuterXml`(または`soapEx.Message`)の出力内容
+
+これが分かれば、不正の原因をかなり絞り込めます。
