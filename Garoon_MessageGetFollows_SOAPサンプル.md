@@ -225,3 +225,114 @@ Web参照経由だと何を送っているか見えづらいので、`SoapExtens
 - `soapEx.Detail.OuterXml`(または`soapEx.Message`)の出力内容
 
 これが分かれば、不正の原因をかなり絞り込めます。
+
+
+VB.NET/.NET Framework 4.8での実装ですね。設計の考え方も含めて回答します。
+
+## 設計方針
+
+**責務は分けた方がいい**です。理由は：
+
+- 「行単位の検証・エラー書き込み」と「エラー列名の集計・表示」は目的が違う
+- 後で検証ロジックだけ再利用したい場面（保存前チェックのみ、UI通知なし等）が出やすい
+- テストしやすい
+
+というわけで、以下のような構成をお勧めします。
+
+```vb
+' 1つの検証結果を表す小さな構造体
+Public Structure ValidationError
+    Public Property ColumnName As String
+    Public Property Message As String
+End Structure
+
+Public Class DataTableValidator
+
+    ''' <summary>
+    ''' DataTableを検証し、各行のRowErrorとエラー列にエラー情報を設定する。
+    ''' エラーがあった列名のセットを返す（呼び出し側でメッセージ表示に使う）。
+    ''' </summary>
+    Public Function ValidateAndMarkErrors(dt As DataTable) As HashSet(Of String)
+        Dim errorColumns As New HashSet(Of String)()
+
+        For Each row As DataRow In dt.Rows
+            If row.RowState = DataRowState.Deleted Then Continue For
+
+            Dim rowErrors As New List(Of ValidationError)()
+
+            ' --- 個別の検証ロジック ---
+            rowErrors.AddRange(ValidateRow(row))
+
+            ' --- 行への反映 ---
+            If rowErrors.Count > 0 Then
+                For Each err In rowErrors
+                    row.SetColumnError(err.ColumnName, err.Message)
+                    errorColumns.Add(err.ColumnName)
+                Next
+                row.RowError = String.Join(vbCrLf, rowErrors.Select(Function(e) e.Message))
+            Else
+                row.ClearErrors()
+            End If
+        Next
+
+        Return errorColumns
+    End Function
+
+    ''' <summary>1行分の検証ルールをまとめる</summary>
+    Private Function ValidateRow(row As DataRow) As List(Of ValidationError)
+        Dim errors As New List(Of ValidationError)()
+
+        If row.IsNull("商品コード") OrElse CStr(row("商品コード")) = "" Then
+            errors.Add(New ValidationError With {
+                .ColumnName = "商品コード",
+                .Message = "商品コードが未入力です。"
+            })
+        End If
+
+        If Not row.IsNull("数量") Then
+            Dim qty As Decimal
+            If Decimal.TryParse(row("数量").ToString(), qty) Then
+                If qty < 0 Then
+                    errors.Add(New ValidationError With {
+                        .ColumnName = "数量",
+                        .Message = "数量は0以上で入力してください。"
+                    })
+                End If
+            Else
+                errors.Add(New ValidationError With {
+                    .ColumnName = "数量",
+                    .Message = "数量が数値ではありません。"
+                })
+            End If
+        End If
+
+        Return errors
+    End Function
+
+End Class
+```
+
+## 呼び出し側（表示担当）
+
+```vb
+Dim validator As New DataTableValidator()
+Dim errorColumns = validator.ValidateAndMarkErrors(dt)
+
+If errorColumns.Count > 0 Then
+    MessageBox.Show(
+        "以下の列にエラーがあります:" & vbCrLf & String.Join(vbCrLf, errorColumns),
+        "入力エラー",
+        MessageBoxButtons.OK,
+        MessageBoxIcon.Warning)
+Else
+    MessageBox.Show("エラーはありませんでした。")
+End If
+```
+
+## ポイント
+
+- `SetColumnError` / `RowError` を使うと、DataGridView・C1FlexGridなどのバインドグリッドで自動的にエラーアイコンが出せます（お使いのC1FlexGridでも対応しているはずです）
+- 検証メソッド（`ValidateAndMarkErrors`）は**戻り値でエラー列名を返すだけ**にして、メッセージ表示はしない
+- 表示は呼び出し元（フォームやプレゼンター）でやる — MVVM的にもこちらが自然です
+
+同じメソッド内で書くこと自体は動きますが、上記のように分けておくと「保存前は検証だけ実行してダイアログは出さない」といった変更にも柔軟に対応できます。
