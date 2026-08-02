@@ -154,77 +154,112 @@ USING (SELECT :nendo AS NENDO FROM DUAL) s
 
 ```sql
 WITH
--- ── 判定基準（年度ごと）──
 base_dt AS (
-    SELECT NENDO,
-           LAST_SUCCESS_DT - INTERVAL '25' HOUR AS FROM_DT
+    SELECT NENDO, LAST_SUCCESS_DT - INTERVAL '25' HOUR AS FROM_DT
       FROM EXCEL_OUTPUT_STATUS
 ),
--- 全年度で最も古い基準日時。ログの事前絞り込み用（性能対策）
 min_dt AS (
-    SELECT CASE WHEN COUNT(*) > COUNT(LAST_SUCCESS_DT)
-                THEN NULL                       -- 未出力年度あり = 全期間対象
-                ELSE MIN(LAST_SUCCESS_DT) - INTERVAL '25' HOUR
-           END AS FROM_DT
+    SELECT CASE WHEN COUNT(*) > COUNT(LAST_SUCCESS_DT) THEN NULL
+                ELSE MIN(LAST_SUCCESS_DT) - INTERVAL '25' HOUR END AS FROM_DT
       FROM EXCEL_OUTPUT_STATUS
 ),
--- ── 対象ログの抽出 ──
 chg AS (
-    SELECT c.UPD_DT,
-           c.TBL_NM,
-           c.PK_VAL,
-           c.COL_NM,
-           c.OLD_VAL,
-           c.NEW_VAL,
-           -- SPEC自身は最上位階層カラムがNULLなので自分のPKを使う
-           CASE WHEN c.TBL_NM = 'SPEC' THEN c.PK_VAL
-                ELSE c.ROOT_PK_VAL
-           END AS SPEC_SEQ_S
+    SELECT c.UPD_DT, c.TBL_NM, c.PK_VAL, c.COL_NM,
+           c.OLD_VAL, c.NEW_VAL, c.ROOT_PK_VAL
       FROM CHANGE_LOG c
      CROSS JOIN min_dt m
      WHERE c.TBL_NM IN ('SPEC','PART','OPT','SUP')
        AND c.SCHEMA_NM = :schema
        AND (m.FROM_DT IS NULL OR c.UPD_DT >= m.FROM_DT)
 ),
--- ── 影響を受けるSPEC_SEQ（付け替え考慮）──
--- PARTの親付け替え(SPEC_SEQのUPDATE)は旧親・新親の両方が影響を受ける
-affected AS (
-    SELECT UPD_DT, TBL_NM, PK_VAL, SPEC_SEQ_S FROM chg
-    UNION ALL
-    SELECT UPD_DT, TBL_NM, PK_VAL, OLD_VAL
-      FROM chg
-     WHERE TBL_NM = 'PART' AND COL_NM = 'SPEC_SEQ' AND OLD_VAL IS NOT NULL
-    UNION ALL
-    SELECT UPD_DT, TBL_NM, PK_VAL, NEW_VAL
-      FROM chg
-     WHERE TBL_NM = 'PART' AND COL_NM = 'SPEC_SEQ' AND NEW_VAL IS NOT NULL
+------------------------------------------------------------------
+-- 親子対応表：現行テーブル + ログの旧値/新値
+-- 削除済み・付け替え済みの行もここで拾える
+------------------------------------------------------------------
+part_spec AS (
+    SELECT TO_CHAR(PART_SEQ) AS C, TO_CHAR(SPEC_SEQ) AS P FROM PART
+    UNION
+    SELECT PK_VAL, OLD_VAL FROM CHANGE_LOG
+     WHERE TBL_NM='PART' AND COL_NM='SPEC_SEQ' AND OLD_VAL IS NOT NULL
+    UNION
+    SELECT PK_VAL, NEW_VAL FROM CHANGE_LOG
+     WHERE TBL_NM='PART' AND COL_NM='SPEC_SEQ' AND NEW_VAL IS NOT NULL
 ),
--- ── SPEC_SEQ → 仕様書NO（現行 + ログ内の旧値・新値）──
--- 削除済み・年度変更済みのSPECもここで拾う
+opt_part AS (
+    SELECT TO_CHAR(OPT_SEQ), TO_CHAR(PART_SEQ) FROM OPT
+    UNION
+    SELECT PK_VAL, OLD_VAL FROM CHANGE_LOG
+     WHERE TBL_NM='OPT' AND COL_NM='PART_SEQ' AND OLD_VAL IS NOT NULL
+    UNION
+    SELECT PK_VAL, NEW_VAL FROM CHANGE_LOG
+     WHERE TBL_NM='OPT' AND COL_NM='PART_SEQ' AND NEW_VAL IS NOT NULL
+),
+sup_opt AS (
+    SELECT TO_CHAR(SUP_SEQ), TO_CHAR(OPT_SEQ) FROM SUP
+    UNION
+    SELECT PK_VAL, OLD_VAL FROM CHANGE_LOG
+     WHERE TBL_NM='SUP' AND COL_NM='OPT_SEQ' AND OLD_VAL IS NOT NULL
+    UNION
+    SELECT PK_VAL, NEW_VAL FROM CHANGE_LOG
+     WHERE TBL_NM='SUP' AND COL_NM='OPT_SEQ' AND NEW_VAL IS NOT NULL
+),
+------------------------------------------------------------------
+-- 影響を受ける SPEC_SEQ の特定
+--   ROOT_PK_VAL があればそれを使い、NULL なら自力で辿る
+------------------------------------------------------------------
+affected AS (
+    -- SPEC 自身
+    SELECT UPD_DT, TBL_NM, PK_VAL, PK_VAL AS SPEC_SEQ_S
+      FROM chg WHERE TBL_NM='SPEC'
+    UNION ALL
+    -- PART：ROOT または SPEC_SEQ の旧値・新値
+    SELECT c.UPD_DT, c.TBL_NM, c.PK_VAL,
+           COALESCE(c.ROOT_PK_VAL, ps.P)
+      FROM chg c
+      LEFT JOIN part_spec ps ON ps.C = c.PK_VAL
+     WHERE c.TBL_NM='PART'
+    UNION ALL
+    -- OPT：ROOT または PART 経由
+    SELECT c.UPD_DT, c.TBL_NM, c.PK_VAL,
+           COALESCE(c.ROOT_PK_VAL, ps.P)
+      FROM chg c
+      LEFT JOIN opt_part  op ON op.C = c.PK_VAL
+      LEFT JOIN part_spec ps ON ps.C = op.P
+     WHERE c.TBL_NM='OPT'
+    UNION ALL
+    -- SUP：ROOT または OPT→PART 経由
+    SELECT c.UPD_DT, c.TBL_NM, c.PK_VAL,
+           COALESCE(c.ROOT_PK_VAL, ps.P)
+      FROM chg c
+      LEFT JOIN sup_opt   so ON so.C = c.PK_VAL
+      LEFT JOIN opt_part  op ON op.C = so.P
+      LEFT JOIN part_spec ps ON ps.C = op.P
+     WHERE c.TBL_NM='SUP'
+),
 spec_no_all AS (
     SELECT TO_CHAR(SPEC_SEQ) AS SPEC_SEQ_S, SPEC_NO FROM SPEC
     UNION
-    SELECT PK_VAL, OLD_VAL
-      FROM CHANGE_LOG
-     WHERE TBL_NM = 'SPEC' AND COL_NM = 'SPEC_NO' AND OLD_VAL IS NOT NULL
+    SELECT PK_VAL, OLD_VAL FROM CHANGE_LOG
+     WHERE TBL_NM='SPEC' AND COL_NM='SPEC_NO' AND OLD_VAL IS NOT NULL
     UNION
-    SELECT PK_VAL, NEW_VAL
-      FROM CHANGE_LOG
-     WHERE TBL_NM = 'SPEC' AND COL_NM = 'SPEC_NO' AND NEW_VAL IS NOT NULL
+    SELECT PK_VAL, NEW_VAL FROM CHANGE_LOG
+     WHERE TBL_NM='SPEC' AND COL_NM='SPEC_NO' AND NEW_VAL IS NOT NULL
 ),
--- ── SPEC_SEQ → 年度 ──
 spec_year AS (
-    SELECT DISTINCT
-           SPEC_SEQ_S,
-           2000 + TO_NUMBER(SUBSTR(SPEC_NO, 2, 2)) AS NENDO
+    SELECT DISTINCT SPEC_SEQ_S,
+           2000 + TO_NUMBER(SUBSTR(SPEC_NO,2,2)) AS NENDO
       FROM spec_no_all
      WHERE REGEXP_LIKE(SPEC_NO, '^[A-Z][0-9]{2}[A-Za-z0-9]*$')
+),
+------------------------------------------------------------------
+-- 安全網：年度を特定できなかった変更が存在するか
+------------------------------------------------------------------
+unresolved AS (
+    SELECT COUNT(*) AS CNT FROM affected WHERE SPEC_SEQ_S IS NULL
 )
--- ── 出力対象年度 ──
 SELECT sy.NENDO,
-       COUNT(DISTINCT a.TBL_NM || '/' || a.PK_VAL) AS CHANGED_ROW_CNT,
-       COUNT(*)                                    AS CHANGE_LOG_CNT,
-       MAX(a.UPD_DT)                               AS LAST_CHANGE_DT,
+       COUNT(DISTINCT a.TBL_NM||'/'||a.PK_VAL) AS CHANGED_ROW_CNT,
+       MAX(a.UPD_DT)                           AS LAST_CHANGE_DT,
        COUNT(DISTINCT CASE WHEN a.TBL_NM='SPEC' THEN a.PK_VAL END) AS SPEC_CNT,
        COUNT(DISTINCT CASE WHEN a.TBL_NM='PART' THEN a.PK_VAL END) AS PART_CNT,
        COUNT(DISTINCT CASE WHEN a.TBL_NM='OPT'  THEN a.PK_VAL END) AS OPT_CNT,
@@ -233,9 +268,7 @@ SELECT sy.NENDO,
   FROM affected a
   JOIN spec_year sy ON sy.SPEC_SEQ_S = a.SPEC_SEQ_S
   LEFT JOIN base_dt b ON b.NENDO = sy.NENDO
- WHERE b.NENDO   IS NULL
-    OR b.FROM_DT IS NULL
-    OR a.UPD_DT >= b.FROM_DT
+ WHERE b.NENDO IS NULL OR b.FROM_DT IS NULL OR a.UPD_DT >= b.FROM_DT
  GROUP BY sy.NENDO, b.NENDO
  ORDER BY sy.NENDO
 ```
@@ -290,3 +323,9 @@ SELECT sy.NENDO,
 ^[A-Z][0-9]{2}[a-zA-Z0-9]*$ を必ずアンカー付きで。Oracleの REGEXP_LIKE はデフォルトで部分一致なので、アンカーなしだと不正なNOを拾います。
 
 年度の2桁 → 4桁変換ルール（26 → 2026）も、どこかに定数として1箇所にまとめておかないと、DB側のビューとアプリ側で二重実装になりがちです。
+
+変更管理テーブルのインデックス定義
+```sql
+CREATE INDEX IX_CHANGE_LOG_01 ON CHANGE_LOG (UPD_DT, TBL_NM);
+CREATE INDEX IX_CHANGE_LOG_02 ON CHANGE_LOG (TBL_NM, COL_NM);  -- spec_no_all用
+```
