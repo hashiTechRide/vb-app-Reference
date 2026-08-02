@@ -329,3 +329,208 @@ SELECT sy.NENDO,
 CREATE INDEX IX_CHANGE_LOG_01 ON CHANGE_LOG (UPD_DT, TBL_NM);
 CREATE INDEX IX_CHANGE_LOG_02 ON CHANGE_LOG (TBL_NM, COL_NM);  -- spec_no_all用
 ```
+
+## 考え方
+
+「スキップ」の実体は、**ロック取得UPDATEの更新件数が0だったら次の年度へ進む**、それだけです。`SELECT` で状態を確認してから `UPDATE` すると隙間ができるので、必ず1文で判定します。
+
+前回のロック取得SQLがそのまま使えます。
+
+---
+
+## VB.NET 実装
+
+```vb
+Public Enum OutputResult
+    Success
+    Skipped      ' 他プロセスが実行中
+    Failed       ' Excel保存失敗など
+End Enum
+
+''' <summary>全年度を出力する。競合した年度はスキップして継続。</summary>
+Public Sub RunAllYears(owner As String)
+    Dim years = _statusRepo.GetTargetYears()   ' 降順で取得
+
+    Dim skipped As New List(Of Integer)
+    Dim failed As New List(Of Integer)
+
+    For Each nendo In years
+        Select Case ExportOneYear(nendo, owner)
+            Case OutputResult.Skipped : skipped.Add(nendo)
+            Case OutputResult.Failed  : failed.Add(nendo)
+        End Select
+    Next
+
+    _logger.Info($"出力完了 対象:{years.Count} スキップ:{skipped.Count} 失敗:{failed.Count}")
+    If skipped.Any() Then _logger.Warn($"スキップ年度: {String.Join(",", skipped)}")
+End Sub
+
+Private Function ExportOneYear(nendo As Integer, owner As String) As OutputResult
+    ' ── ロック取得。失敗したら即スキップ（待たない）──
+    If Not _statusRepo.TryAcquireLock(nendo, owner) Then
+        _logger.Info($"{nendo}年度: 他プロセス実行中のためスキップ")
+        Return OutputResult.Skipped
+    End If
+
+    Dim startedAt = _statusRepo.GetServerTime()   ' 差分検知用に開始時刻を保持
+
+    Try
+        Using hb As New HeartbeatTimer(_statusRepo, nendo, owner)
+            Dim rows = _dataRepo.FetchByYear(nendo)
+            Dim tmpPath = _excelWriter.WriteToTemp(nendo, rows)
+
+            Try
+                FileUtil.ReplaceAtomic(tmpPath, GetFilePath(nendo))
+            Catch ex As IOException When FileUtil.IsSharingViolation(ex)
+                ' 誰かが開いている。想定内の失敗
+                _statusRepo.MarkFailed(nendo, "FILE_LOCKED", ex.Message)
+                Return OutputResult.Failed
+            End Try
+
+            _statusRepo.MarkSuccess(nendo, startedAt, rows.Count)
+            Return OutputResult.Success
+        End Using
+
+    Catch ex As Exception
+        _logger.Error(ex, $"{nendo}年度の出力に失敗")
+        _statusRepo.MarkFailed(nendo, "UNEXPECTED", ex.Message)
+        Return OutputResult.Failed
+
+    Finally
+        ' 成否に関わらず必ず解放。ここが漏れると年度が永久に固まる
+        _statusRepo.ReleaseLock(nendo, owner)
+    End Try
+End Function
+```
+
+`Finally` での `ReleaseLock` が要です。ハートビートによる残留回収は最後の保険であって、正常系で頼るものではありません。
+
+---
+
+## ロック取得（更新件数で判定）
+
+```vb
+Public Function TryAcquireLock(nendo As Integer, owner As String) As Boolean
+    Const sql = "
+        UPDATE EXCEL_OUTPUT_STATUS
+           SET STATUS            = 'RUNNING',
+               LOCK_OWNER        = :owner,
+               LOCK_ACQUIRED_DT  = SYSDATE,
+               LOCK_HEARTBEAT_DT = SYSDATE,
+               LAST_ATTEMPT_DT   = SYSDATE,
+               UPD_DT            = SYSDATE,
+               UPD_USER          = :owner
+         WHERE NENDO = :nendo
+           AND (STATUS = 'IDLE'
+                OR LOCK_HEARTBEAT_DT < SYSDATE - INTERVAL '10' MINUTE)"
+
+    Using cmd = CreateCommand(sql)
+        cmd.Parameters.Add(":owner", owner)
+        cmd.Parameters.Add(":nendo", nendo)
+        Dim affected = cmd.ExecuteNonQuery()
+        _connection.Commit()          ' ← 即コミット。トランザクションを引っ張らない
+        Return affected > 0
+    End Using
+End Function
+```
+
+**即コミットが重要**です。ロックを保持したままトランザクションを開けておくと、Oracleの行ロックで手動出力側の `TryAcquireLock` が**待たされてしまい**、「即座に諦める」が成立しません。
+
+ロックの実体は行ロックではなく `STATUS` 列の値です。DBトランザクションは短く閉じます。
+
+---
+
+## 解放
+
+```vb
+Public Sub ReleaseLock(nendo As Integer, owner As String)
+    Const sql = "
+        UPDATE EXCEL_OUTPUT_STATUS
+           SET STATUS            = 'IDLE',
+               LOCK_OWNER        = NULL,
+               LOCK_ACQUIRED_DT  = NULL,
+               LOCK_HEARTBEAT_DT = NULL,
+               UPD_DT            = SYSDATE
+         WHERE NENDO = :nendo
+           AND LOCK_OWNER = :owner"    -- 自分が取ったロックだけ解放
+    ' ...
+End Sub
+```
+
+`LOCK_OWNER = :owner` の条件を必ず付けてください。ハートビート切れで別プロセスに奪われた後に自分が解放すると、**他人の実行中ロックを解除**してしまいます。
+
+---
+
+## 手動出力側
+
+自動と同じ `ExportOneYear` を呼び、`Skipped` のときだけUIに出します。
+
+```vb
+Private Async Sub btnExport_Click(sender As Object, e As EventArgs)
+    Dim nendo = CInt(cmbNendo.SelectedValue)
+    btnExport.Enabled = False
+    Try
+        Dim result = Await Task.Run(Function() ExportOneYear(nendo, GetOwnerId()))
+
+        Select Case result
+            Case OutputResult.Skipped
+                MessageBox.Show($"{nendo}年度は現在、他の処理が実行中です。" &
+                                vbCrLf & "しばらく待ってから再度実行してください。",
+                                "出力できません", MessageBoxButtons.OK,
+                                MessageBoxIcon.Information)
+            Case OutputResult.Failed
+                MessageBox.Show("出力に失敗しました。ファイルが開かれていないか確認してください。", ...)
+            Case OutputResult.Success
+                MessageBox.Show($"{nendo}年度を出力しました。", ...)
+        End Select
+    Finally
+        btnExport.Enabled = True
+    End Try
+End Sub
+```
+
+「実行中です」に加えて**誰が実行中か**を出すと、問い合わせが減ります。`LOCK_OWNER` を返して「〇〇さんが実行中です」と表示するのは、社内システムなら有効です（自動バッチなら「自動出力処理」と表示）。
+
+---
+
+## ハートビート
+
+```vb
+Friend NotInheritable Class HeartbeatTimer : Implements IDisposable
+    Private ReadOnly _timer As System.Threading.Timer
+
+    Public Sub New(repo As IStatusRepository, nendo As Integer, owner As String)
+        _timer = New System.Threading.Timer(
+            Sub() 
+                Try
+                    repo.Heartbeat(nendo, owner)
+                Catch
+                    ' 心拍の失敗で本処理を止めない
+                End Try
+            End Sub,
+            Nothing, TimeSpan.FromMinutes(1), TimeSpan.FromMinutes(1))
+    End Sub
+
+    Public Sub Dispose() Implements IDisposable.Dispose
+        _timer?.Dispose()
+    End Sub
+End Class
+```
+
+心拍の間隔（1分）と残留判定（10分）は十分な差を空けてください。1年度の出力に10分以上かかる可能性があるなら、判定側を伸ばす必要があります。
+
+---
+
+## 注意点
+
+**`LOCK_OWNER` の一意性** — `Environment.MachineName & "\" & Environment.UserName` だと、同じPCで常駐アプリとデスクトップアプリが同じユーザーで動くと**同じ値**になります。プロセスIDかアプリ種別を含めてください。
+
+```vb
+$"{Environment.MachineName}\{Environment.UserName}:{appKind}:{Process.GetCurrentProcessId()}"
+```
+
+これを分けないと、`ReleaseLock` の所有者チェックが機能しません。
+
+**スキップの可視化** — スキップは「正常な結果」ですが、毎晩同じ年度がスキップされ続けているなら異常です。`EXCEL_OUTPUT_STATUS` の `LAST_SUCCESS_DT` を見て、3日以上成功していない年度を検知する監視は別途入れておくべきです。スキップ自体はエラーではないので、そこだけ見ていると気づけません。
+
+**時刻はDBサーバー基準で** — `startedAt` にクライアントの `DateTime.Now` を使うと、PCの時計ずれがそのまま差分検知（将来復活させる可能性を含め）や監視に効きます。`SELECT SYSDATE FROM DUAL` で取ってください。
