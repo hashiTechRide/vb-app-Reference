@@ -1,15 +1,16 @@
 <!doctype html><html><head><meta charset=utf8><meta name=viewport content="width=device-width,initial-scale=1,viewport-fit=cover"><style>:root{color-scheme:light;box-sizing:border-box;padding-top:env(safe-area-inset-top,0px);padding-bottom:env(safe-area-inset-bottom,0px)}html{scroll-padding-top:env(safe-area-inset-top,0px)}body{margin:0;padding:0;font:14px -apple-system,BlinkMacSystemFont,sans-serif;background:#fff;color:#000}img{max-width:100%}[hidden]:not([hidden=until-found i]){display:none!important}</style></head><body>
 <title>SA過去問ドリル</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=BIZ+UDPGothic:wght@400;700&family=Shippori+Mincho:wght@700&family=IBM+Plex+Mono:wght@500&display=swap">
 <style>
 /* Layout: 試験の答案用紙。上部に細いバー、中央に1枚の「用紙」、解答はマークシートの楕円 */
 :root{
   --paper:#f3f5f8; --sheet:#ffffff; --ink:#1b2533; --ink-2:#5a6676; --rule:#dde2e9;
   --accent:#2b5c8a; --accent-soft:#e6eef6; --mark:#a87a1f; --mark-soft:#f6eedd;
   --ok:#2e7a4d; --ok-soft:#e3f2e9; --ng:#b03f2d; --ng-soft:#f8e6e2;
-  /* OS標準フォント：Windows=Yu Gothic UI／メイリオ、Mac・iPhone=ヒラギノ角ゴ、Android=Noto Sans CJK */
-  --f-body:system-ui,-apple-system,"Segoe UI","Yu Gothic UI","Hiragino Sans","Hiragino Kaku Gothic ProN",Meiryo,"Noto Sans JP","Noto Sans CJK JP",sans-serif;
-  --f-display:var(--f-body);
-  --f-mono:ui-monospace,"SF Mono",Consolas,"Cascadia Mono",Menlo,monospace;
+  --f-display:"Shippori Mincho","Hiragino Mincho ProN","Yu Mincho",serif;
+  --f-body:"BIZ UDPGothic","Hiragino Sans","Yu Gothic",system-ui,sans-serif;
+  --f-mono:"IBM Plex Mono",ui-monospace,Menlo,monospace;
 }
 @media (prefers-color-scheme: dark){:root:not([data-theme="light"]){
   --paper:#11151b; --sheet:#1a2029; --ink:#e3e8ef; --ink-2:#9aa6b6; --rule:#2c3541;
@@ -76,6 +77,12 @@ button:focus-visible,textarea:focus-visible,input:focus-visible{outline:2px soli
 .exp{border-top:1px dashed var(--rule);padding-top:14px;display:flex;flex-direction:column;gap:10px}
 .ans{display:grid;grid-template-columns:7em 1fr;gap:12px;align-items:baseline}
 .ans>span:last-child{min-width:0}
+.celist{list-style:none;margin:0;padding:0;display:flex;flex-direction:column;gap:6px;min-width:0}
+.celist li{display:grid;grid-template-columns:1.8em 1fr;gap:8px;padding:6px 10px;border-radius:6px;border:1px solid var(--rule);font-size:14px}
+.celist li.is-ok{border-color:var(--ok);background:var(--ok-soft)}
+.celist li.is-ng{border-color:var(--ng);background:var(--ng-soft)}
+.celist .ck{font-weight:700;color:var(--ink-2)}
+.celist .mine{display:inline-block;margin-left:8px;font-size:11px;font-weight:700;color:var(--ng);border:1px solid var(--ng);border-radius:999px;padding:0 6px}
 @media (max-width:520px){.ans{grid-template-columns:1fr;gap:2px}}
 .case{white-space:pre-wrap;background:var(--paper);border:1px solid var(--rule);border-radius:8px;padding:16px;font-size:14.5px}
 .sub{display:flex;flex-direction:column;gap:8px;border-top:1px solid var(--rule);padding-top:16px}
@@ -361,9 +368,8 @@ function renderQuiz(){
         return`<button type="button" class="choice ${cls}" data-act="pick" data-v="${i}" ${done?'disabled':''}><span class="bubble">${KANA[i]}</span><span>${esc(c)}</span></button>`}).join('')}</div>
       ${done?`<div class="exp">
         <div class="verdict ${ok?'ok':'ng'}">${ok?'正解':'不正解'}</div>
-        <div class="ans"><span class="lab">正答</span><span><b>${KANA[q.a]}</b>　${esc(q.c[q.a])}</span></div>
-        ${ok?'':`<div class="ans"><span class="lab">あなたの解答</span><span>${KANA[S.ans]}　${esc(q.c[S.ans])}</span></div>`}
         <div class="ans"><span class="lab">解説</span><span>${q.exp?esc(q.exp):'<span class="muted">この問題には解説が登録されていません。</span>'}</span></div>
+        ${q.ce?`<div class="ans"><span class="lab">選択肢ごとの解説</span><ul class="celist">${q.c.map((c,i)=>`<li class="${i===q.a?'is-ok':i===S.ans?'is-ng':''}"><span class="ck">${KANA[i]}</span><span>${i===q.a?'<b>正解</b>　上の解説を参照':esc(q.ce[i]||'')}${i===S.ans&&i!==q.a?'<span class="mine">あなたの解答</span>':''}</span></li>`).join('')}</ul></div>`:''}
         ${q.verify?'<p class="note" style="margin:0">この年度は解答例PDFが空欄だったため、正答は推定です。IPAの公式解答で確認してください。</p>':''}
       </div>`:''}
       <div class="row">${done?`<button type="button" class="btn primary" data-act="next">${S.i+1<S.items.length?'次の問題':'結果を見る'}</button>`:''}
